@@ -1,36 +1,46 @@
-// src/app/api/run/route.js
 import { NextResponse } from "next/server";
-import { agent1_generateCode, agent2_reviewCode, agent3_documentCode } from "../../../lib/agents";
-
+import { 
+  agent1_generateCode, 
+  agent2_reviewCode, 
+  agent3_documentCode 
+} from "../../../lib/agents";
 
 export async function POST(req) {
   try {
-    // Parse incoming JSON
-    const { requirements } = await req.json();
+    const { requirements, model } = await req.json();
 
+    // Validate input
     if (!requirements) {
       return NextResponse.json(
-        { success: false, error: "Missing 'requirements' in request body." },
+        { success: false, error: "requirements is required" },
         { status: 400 }
       );
     }
 
-    // Agent 1: Generate code
-    const generatedCode = await agent1_generateCode(requirements);
+    if (!model) {
+      return NextResponse.json(
+        { success: false, error: "model is required" },
+        { status: 400 }
+      );
+    }
 
-    // Agent 2: Review the code
-    const reviewReport = await agent2_reviewCode(generatedCode);
+    // Agent 1 — generate code
+    const generatedCode = await agent1_generateCode(requirements, model);
 
-    // Agent 3: Generate documentation
-    const documentation = await agent3_documentCode(generatedCode, reviewReport);
+    // Agent 2 — review code
+    const reviewReport = await agent2_reviewCode(generatedCode, model);
 
-    // Return all results
+    // Agent 3 — write documentation
+    const documentation = await agent3_documentCode(generatedCode, reviewReport, model);
+
+    // Return results
     return NextResponse.json({
       success: true,
       generatedCode,
       reviewReport,
-      documentation,
+      documentation
     });
+
   } catch (error) {
     console.error("Error in /api/run:", error);
     return NextResponse.json(

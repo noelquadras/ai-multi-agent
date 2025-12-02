@@ -7,10 +7,10 @@ import {
   DOCUMENTATION_PROMPT
 } from "./agentPrompts";
 
-// --- OLLAMA CLIENT ---
+// Ollama/OpenAI-compatible client
 const client = new OpenAI({
-  apiKey: "ollama-local",             // placeholder, not required by Ollama
-  baseURL: "http://localhost:11434/v1", // Ollama OpenAI-compatible API
+  apiKey: "ollama-local",
+  baseURL: "http://localhost:11434/v1",
 });
 
 // Helper to inject template variables
@@ -18,10 +18,7 @@ function fill(template, data) {
   return template.replace(/{{(.*?)}}/g, (_, key) => data[key.trim()]);
 }
 
-// Local model
-const MODEL = "mistral:7b-instruct";
-
-// ---- Utility: Clean code fences ----
+// Remove markdown code fences
 function cleanCodeBlocks(text) {
   if (!text) return "";
   return text
@@ -33,75 +30,74 @@ function cleanCodeBlocks(text) {
     .trim();
 }
 
-// -----------------------------------------------------------------------------
-// Agent 1 — Code Generator
-// -----------------------------------------------------------------------------
-export async function agent1_generateCode(requirements) {
-  const prompt = fill(CODE_GENERATOR_PROMPT, { USER_REQUIREMENTS: requirements });
+// Default model (fallback)
+const DEFAULT_MODEL = "mistral:7b-instruct";
 
-  try {
-    const res = await client.chat.completions.create({
-      model: MODEL,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
-      max_tokens: 1200,
-    });
+// Utility to call the chat completion
+async function callModel({ model, messages, temperature = 0.2, max_tokens = 1000 }) {
+  const usedModel = model || DEFAULT_MODEL;
 
-    let output = res.choices?.[0]?.message?.content || "";
-    return cleanCodeBlocks(output);
-
-  } catch (err) {
-    console.error("Agent 1 Error:", err);
-    throw new Error("Code generation failed");
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Agent 2 — Code Reviewer
-// -----------------------------------------------------------------------------
-export async function agent2_reviewCode(generatedCode) {
-  const cleaned = cleanCodeBlocks(generatedCode);
-  const prompt = fill(CODE_REVIEWER_PROMPT, { GENERATED_CODE: cleaned });
-
-  try {
-    const res = await client.chat.completions.create({
-      model: MODEL,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.0,
-      max_tokens: 800,
-    });
-
-    return res.choices?.[0]?.message?.content || "";
-
-  } catch (err) {
-    console.error("Agent 2 Error:", err);
-    throw new Error("Code review failed");
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Agent 3 — Documentation Writer
-// -----------------------------------------------------------------------------
-export async function agent3_documentCode(generatedCode, reviewReport) {
-  const cleaned = cleanCodeBlocks(generatedCode);
-
-  const prompt = fill(DOCUMENTATION_PROMPT, {
-    GENERATED_CODE: cleaned,
-    REVIEW_REPORT: reviewReport,
+  const res = await client.chat.completions.create({
+    model: usedModel,
+    messages,
+    temperature,
+    max_tokens,
   });
 
+  const text = res.choices?.[0]?.message?.content ?? "";
+  return text;
+}
+
+// Agent 1 — Code Generator
+export async function agent1_generateCode(requirements, options = {}) {
+  const prompt = fill(CODE_GENERATOR_PROMPT, { USER_REQUIREMENTS: requirements });
   try {
-    const res = await client.chat.completions.create({
-      model: MODEL,
+    const raw = await callModel({
+      model: options.model,
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.4,
-      max_tokens: 1200,
+      temperature: options.temperature ?? 0.2,
+      max_tokens: options.max_tokens ?? 1200,
     });
-
-    return res.choices?.[0]?.message?.content || "";
-
+    return cleanCodeBlocks(raw);
   } catch (err) {
-    console.error("Agent 3 Error:", err);
-    throw new Error("Documentation generation failed");
+    console.error("agent1_generateCode error:", err);
+    throw err;
+  }
+}
+
+// Agent 2 — Code Reviewer
+export async function agent2_reviewCode(generatedCode, options = {}) {
+  const prompt = fill(CODE_REVIEWER_PROMPT, { GENERATED_CODE: generatedCode });
+  try {
+    const raw = await callModel({
+      model: options.model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: options.temperature ?? 0.0,
+      max_tokens: options.max_tokens ?? 800,
+    });
+    return raw;
+  } catch (err) {
+    console.error("agent2_reviewCode error:", err);
+    throw err;
+  }
+}
+
+// Agent 3 — Documentation Writer
+export async function agent3_documentCode(generatedCode, reviewReport, options = {}) {
+  const prompt = fill(DOCUMENTATION_PROMPT, {
+    GENERATED_CODE: generatedCode,
+    REVIEW_REPORT: reviewReport,
+  });
+  try {
+    const raw = await callModel({
+      model: options.model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: options.temperature ?? 0.4,
+      max_tokens: options.max_tokens ?? 1000,
+    });
+    return raw;
+  } catch (err) {
+    console.error("agent3_documentCode error:", err);
+    throw err;
   }
 }
