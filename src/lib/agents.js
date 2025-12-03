@@ -4,7 +4,8 @@ import OpenAI from "openai";
 import {
   CODE_GENERATOR_PROMPT,
   CODE_REVIEWER_PROMPT,
-  DOCUMENTATION_PROMPT
+  DOCUMENTATION_PROMPT,
+  CODE_REFINER_PROMPT
 } from "./agentPrompts";
 
 // Ollama/OpenAI-compatible client
@@ -98,6 +99,28 @@ export async function agent3_documentCode(generatedCode, reviewReport, options =
     return raw;
   } catch (err) {
     console.error("agent3_documentCode error:", err);
+    throw err;
+  }
+}
+
+
+// Agent 4 — Code Refiner
+export async function agent4_refineCode(originalCode, reviewReport, options = {}) {
+  const prompt = fill(CODE_REFINER_PROMPT, {
+    ORIGINAL_CODE: originalCode,
+    REVIEW_REPORT: reviewReport
+  });
+  try {
+    const raw = await callModel({
+      model: options.model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2, // Keep temperature low for deterministic changes
+      max_tokens: options.max_tokens ?? 1500,
+    });
+    // Refiner output must be cleaned of markdown fences
+    return cleanCodeBlocks(raw); 
+  } catch (err) {
+    console.error("agent4_refineCode error:", err);
     throw err;
   }
 }

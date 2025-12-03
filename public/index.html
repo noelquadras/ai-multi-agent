@@ -44,7 +44,7 @@
 
         <div class="col">
           <label for="max_tokens">Max tokens</label>
-          <input id="max_tokens" type="number" step="50" min="64" value="1000" />
+          <input id="max_tokens" type="number" step="50" min="64" value="1014" />
         </div>
       </div>
 
@@ -63,10 +63,14 @@
       <div style="margin-bottom:8px;">
         <span class="badge" id="badge-generator">Generator</span>
         <span class="badge" id="badge-reviewer">Reviewer</span>
+        <span class="badge" id="badge-refiner">Refiner</span>
         <span class="badge" id="badge-documenter">Documenter</span>
       </div>
       <h4>Generated Code</h4>
       <pre id="out-code"></pre>
+
+      <h4>Refined Code (Final)</h4>
+      <pre id="out-code-final"></pre>
 
       <h4>Review Report</h4>
       <pre id="out-review"></pre>

@@ -85,3 +85,20 @@ Your output MUST be a complete, well-formatted document ready to be used as a pr
 [Provide the original code with necessary inline comments added to explain important parts.]
 ---
 `;
+
+export const CODE_REFINER_PROMPT = `
+You are Agent 4: CODE REFINER (The Junior Developer). Your goal is to apply ALL critical fixes and suggested improvements from the REVIEW REPORT to the ORIGINAL CODE. You MUST resolve security flaws, bugs, and follow design suggestions.
+
+ORIGINAL CODE:
+{{ORIGINAL_CODE}}
+
+REVIEW REPORT:
+{{REVIEW_REPORT}}
+
+Rules:
+- Output ONLY the full, refined, and corrected code solution.
+- DO NOT include any explanations, markdown headers, or conversational text.
+- The output MUST be syntactically complete code.
+
+Return ONLY the full, corrected code solution.
+`;
