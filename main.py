@@ -6,14 +6,23 @@ from crewai import Crew, Process
 from tasks.tasks import SoftwareTasks
 from agents.config import code_generator, code_reviewer, code_refiner, doc_writer, decision_maker
 
+# --- DISABLE TELEMETRY (Stops the Sync Handler Errors) ---
+os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "true"
+
 # --- CRITICAL: Set Environment Variables BEFORE Imports ---
 os.environ["OPENAI_API_KEY"] = "NA" 
 os.environ["OPENAI_API_BASE"] = "http://localhost:11434/v1" 
 os.environ["OPENAI_MODEL_NAME"] = "mistral:7b-instruct" 
 # ---------------------------------------------------------
 
-# Load the .env file 
 load_dotenv()
+
+def clean_output(text):
+    """Removes common markdown fences and conversational filler."""
+    if not text:
+        return ""
+    text = re.sub(r'```[a-zA-Z]*\s*|```', '', text, flags=re.DOTALL)
+    return text.strip()
 
 def run_software_crew(requirements: str):
     # 1. Initialize tasks manager
@@ -26,14 +35,14 @@ def run_software_crew(requirements: str):
     
     task_refine = tasks_manager.refine_code_task(
         code_refiner, 
-        task_gen,      # Code Context
-        task_review    # Review Context
+        task_gen,
+        task_review
     )
     
     task_doc = tasks_manager.document_code_task(
         doc_writer, 
-        task_refine,   # Final Code Context
-        task_review    # Review Report Context
+        task_refine,
+        task_review
     )
     
     # 3. Initialize Crew
@@ -44,19 +53,14 @@ def run_software_crew(requirements: str):
         verbose=True 
     )
 
-    # 4. Execute the workflow
-    print("\n\n################################################")
-    print("## 🚀 STARTING CREW EXECUTION                 ##")
-    print("################################################\n")
+    # 4. Execute
+    print("\n\n--- STARTING CREW EXECUTION ---", flush=True)
     
     result = software_crew.kickoff()
     
-    print("\n\n################################################")
-    print("## ✅ EXECUTION COMPLETE                      ##")
-    print("################################################\n")
+    print("\n\n--- EXECUTION COMPLETE ---", flush=True)
 
-    # 5. Extract structured outputs from the tasks directly
-    # CrewAI stores the output in the task object after execution
+    # 5. Extract structured outputs
     return {
         "generated_code": str(task_gen.output),
         "review_report": str(task_review.output),
@@ -66,7 +70,6 @@ def run_software_crew(requirements: str):
     }
 
 if __name__ == "__main__":
-    # CLI Fallback
     req = input("Enter requirements: ")
     res = run_software_crew(req)
     print(res)

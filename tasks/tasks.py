@@ -1,6 +1,5 @@
 # tasks/tasks.py
 from crewai import Task
-# from crewai.tools import toolool # Optional: Import if you plan to add tools later
 
 class SoftwareTasks:
     def __init__(self, requirements):
@@ -23,7 +22,8 @@ class SoftwareTasks:
             agent=agent,
             expected_output="A structured review report in markdown format.",
             context=[code_context],
-            async_execution=True # IMPORTANT: Runs in parallel
+            # CHANGE: Set to False to allow Streamlit to capture the logs live
+            async_execution=False 
         )
 
     def make_refine_decision_task(self, agent, code_context):
@@ -35,7 +35,8 @@ class SoftwareTasks:
             agent=agent,
             expected_output="A single word: 'YES' or 'NO'.",
             context=[code_context],
-            async_execution=True # IMPORTANT: Runs in parallel
+            # CHANGE: Set to False to allow Streamlit to capture the logs live
+            async_execution=False 
         )
 
     def refine_code_task(self, agent, code_context, review_context):
