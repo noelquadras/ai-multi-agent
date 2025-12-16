@@ -1,6 +1,8 @@
 # agents/config.py
 from crewai import Agent, LLM
-from dotenv import load_dotenv 
+from dotenv import load_dotenv
+from tools.executor import execute as python_executor  # rename for compatibility
+
 
 # Load environment variables
 load_dotenv() 
@@ -50,23 +52,26 @@ decision_maker = Agent(
         "You are a deterministic system auditor. Your single job is to analyze the generated code "
         "and produce a one-word decision: YES or NO."
     ),
-    verbose=False, 
+    verbose=True, 
     llm=ollama_llm,
-    max_iter=1,
+    max_iter=3,
     allow_delegation=False
 )
 
-# Agent 4: Code Refiner (The Junior Developer)
+# --- UPDATED Agent 4: Code Refiner ---
 code_refiner = Agent(
     role='Junior Developer specializing in Refactoring',
-    goal='Refine and fix code by applying every suggestion from the review report exactly.',
+    goal='Fix code by applying review suggestions AND running the code to ensure it works.',
     backstory=(
-        "You are responsible for the final, bug-free, and secure version of the code. "
-        "Your final output MUST be syntactically complete code, nothing else."
+        "You are responsible for the final, bug-free version of the code. "
+        "You have access to a Python execution tool. "
+        "You should run the code, check the output, and if there is an error, fix it and run it again until it works."
     ),
     verbose=True,
+    allow_code_execution=True,
     llm=ollama_llm,
-    max_iter=3
+    max_iter=5, # Give them more iterations to try/fix/try/fix
+    tools=[python_executor] # <-- GIVE THE AGENT THE TOOL
 )
 
 # Agent 3: Documentation Writer (The Technical Writer)

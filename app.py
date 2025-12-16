@@ -1,181 +1,242 @@
+# app.py
 import streamlit as st
-import streamlit.components.v1 as components
 import sys
-import time
-import re
 import threading
 import queue
-from main import run_software_crew
+import importlib
+import os
+import re
+import time
+from typing import Dict
 
-# --- Page Config ---
-st.set_page_config(
-    page_title="AI Software Team",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Import Crew runner and sandbox tools
+from tools.sandbox_subprocess import run_code_in_subprocess
 
-# --- Custom CSS ---
+# -------------------------
+# Page config and CSS
+# -------------------------
+st.set_page_config(page_title="AI Software Crew", page_icon="🤖", layout="wide")
 st.markdown("""
-    <style>
-    .stApp { background-color: #0e1117; color: #c9d1d9; }
-    
-    /* Terminal Box Styling */
-    .terminal-box {
-        font-family: 'Consolas', 'Courier New', monospace;
-        background-color: #000000;
-        color: #00ff00; /* Hacker Green */
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #333;
-        height: 500px;
-        overflow-y: auto; /* Allow scrolling */
-        font-size: 14px;
-        line-height: 1.5;
-        white-space: pre-wrap; /* Preserve formatting */
-        box-shadow: inset 0 0 15px rgba(0,0,0,0.8);
-    }
-    
-    .agent-header { color: #ffcc00; font-weight: bold; font-size: 1.1em; border-bottom: 1px solid #444; padding-bottom: 3px; }
-    .task-header { color: #00ccff; font-style: italic; margin-top: 10px; }
-    .thought-text { color: #888; font-size: 0.9em; }
-    .success-text { color: #00ff00; font-weight: bold; }
-    .error-text { color: #ff4444; }
-    </style>
+<style>
+body { background: #0b1220; color: #cfe8ff; }
+.panel { padding: 10px; }
+.terminal {
+  background: #000;
+  color: #66ff99;
+  padding: 12px;
+  border-radius: 6px;
+  height: 520px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: "Consolas", monospace;
+  border: 1px solid #222;
+}
+.panel-title { font-weight: 600; margin-bottom: 8px; }
+.btn { background: #0b5cff; color: #fff; padding: 8px 12px; border-radius: 6px; }
+.small { font-size: 12px; color: #9fb0c8; }
+</style>
 """, unsafe_allow_html=True)
 
-st.title("🤖 AI Software Crew")
-st.markdown("#### Local Multi-Agent Development Team (Mistral-7B)")
+st.title("🤖 AI Software Crew — Live Execution")
 
-# --- Sidebar ---
+# -------------------------
+# Layout: left = logs, right = Docker execution
+# -------------------------
+left_col, right_col = st.columns([2, 2])
+
+# -------------------------
+# Sidebar controls
+# -------------------------
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/bot.png", width=80)
     st.header("Mission Control")
-    requirements = st.text_area("Requirements:", height=200, placeholder="e.g., Write a Snake Game in Python.")
-    run_btn = st.button("🚀 Kickoff Crew", type="primary")
+    model = st.selectbox("Model", ["mistral:7b-instruct", "codellama:13b"], index=0)
+    temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
+    max_tokens = st.number_input("Max tokens", min_value=128, max_value=4000, value=1200, step=50)
+    requirements = st.text_area(
+        "Requirements for Crew",
+        height=220,
+        placeholder="e.g., Create a CLI app that prints Fibonacci numbers"
+    )
+    run_crew_btn = st.button("🚀 Run Crew")
 
-# --- Thread-Safe Logger ---
+# -------------------------
+# Thread-safe queue logger
+# -------------------------
 class QueueLogger:
-    """
-    Redirects console output to a Python Queue instead of the screen.
-    This allows the background thread to write logs safely.
-    """
-    def __init__(self, log_queue):
-        self.log_queue = log_queue
-        self.terminal = sys.stdout 
-        self.ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-        self.box_escape = re.compile(r'[╭╮╰╯│─]+') 
+    def __init__(self, q: queue.Queue):
+        self.q = q
+        self.ansi = re.compile(r'\x1B[@-_][0-?]*[ -/]*[@-~]')
 
     def write(self, message):
-        # 1. Clean the message
-        cleaned = self.ansi_escape.sub('', message)
-        cleaned = self.box_escape.sub('', cleaned)
-        
-        # 2. Put in queue if it's not just whitespace
-        if cleaned.strip():
-            formatted = cleaned
-            if "Agent:" in cleaned:
-                formatted = f"\n<span class='agent-header'>🤖 {cleaned.strip()}</span>"
-            elif "Task:" in cleaned:
-                formatted = f"\n<span class='task-header'>📋 {cleaned.strip()}</span>"
-            elif "Entering new CrewAgentExecutor chain" in cleaned:
-                formatted = "<span class='thought-text'>...Thinking...</span>"
-            elif "Final Answer:" in cleaned:
-                formatted = f"\n<span class='success-text'>✅ {cleaned.strip()}</span>"
-            
-            self.log_queue.put(formatted)
+        if not message:
+            return
+        clean = self.ansi.sub("", str(message)).strip()
+        if clean:
+            self.q.put(clean)
 
     def flush(self):
         pass
 
-# --- Main Execution Logic ---
-if run_btn and requirements:
-    st.subheader("⚙️ Live Agent Operations")
-    
-    # 1. Setup UI Container
-    log_container = st.empty()
-    scroller_container = st.empty() # Invisible container for JS updates
-    log_buffer = []
-    
-    # 2. Setup Threading
-    log_queue = queue.Queue()
-    result_container = {"result": None, "error": None}
+# -------------------------
+# Crew runner thread
+# -------------------------
+def crew_runner(req_text: str, mdl: str, q: queue.Queue, result_holder: Dict):
+    os.environ["OPENAI_MODEL_NAME"] = mdl
+    os.environ["OPENAI_TEMPERATURE"] = str(temp)
+    os.environ["OPENAI_MAX_TOKENS"] = str(max_tokens)
 
-    def run_in_thread(reqs, q, res_cont):
-        sys.stdout = QueueLogger(q)
-        try:
-            res_cont["result"] = run_software_crew(reqs)
-        except Exception as e:
-            res_cont["error"] = str(e)
-        finally:
-            sys.stdout = sys.__stdout__ 
+    # Dynamic import of main.py
+    try:
+        if "main" in sys.modules:
+            del sys.modules["main"]
+        import main
+        importlib.reload(main)
+    except Exception as e:
+        q.put(f"[ERROR] Failed to import main.py: {e}")
+        result_holder["error"] = str(e)
+        return
 
-    # 3. Start Background Thread
-    bg_thread = threading.Thread(target=run_in_thread, args=(requirements, log_queue, result_container))
-    bg_thread.start()
+    old_stdout = sys.stdout
+    sys.stdout = QueueLogger(q)
+    try:
+        q.put("[Crew] Starting run_software_crew()")
+        out = main.run_software_crew(req_text)
+        q.put("[Crew] Completed run_software_crew()")
+        result_holder["result"] = out
+    except Exception as e:
+        q.put(f"[Crew ERROR] {e}")
+        result_holder["error"] = str(e)
+    finally:
+        sys.stdout = old_stdout
 
-    # 4. Main Loop: Poll Queue -> Update UI
-    counter = 0 
-    while bg_thread.is_alive() or not log_queue.empty():
-        try:
-            # Get line from queue
-            line = log_queue.get_nowait()
-            log_buffer.append(line)
-            
-            # Update the UI container
-            log_content = '<br>'.join(log_buffer)
-            html_content = f"""
-            <div id='terminal-logs' class='terminal-box'>
-                {log_content}
-            </div>
-            """
-            log_container.markdown(html_content, unsafe_allow_html=True)
-            
-            # --- JS SCROLL INJECTION (Fixed Syntax) ---
-            if counter % 5 == 0: # Throttle JS updates
-                js = f"""
-                    <script>
-                        var terminal = window.parent.document.getElementById('terminal-logs');
-                        if (terminal) {{
-                            terminal.scrollTop = terminal.scrollHeight;
-                        }}
-                    </script>
-                """
-                # FIX: Use 'with' block to place component in the specific container
-                with scroller_container:
-                    components.html(js, height=0, width=0)
-            
-            counter += 1
-            
-        except queue.Empty:
-            time.sleep(0.1) 
+# -------------------------
+# Junior Dev Docker runner
+# -------------------------
+def run_junior_dev_docker(code: str, q: queue.Queue):
+    q.put("[Docker] Junior Developer running code in Docker...")
+    # For simplicity, using sandbox runner (replace with Docker API if desired)
+    def stream(line: str, is_err: bool):
+        prefix = "[stderr]" if is_err else "[stdout]"
+        q.put(f"{prefix} {line}")
 
-    # 5. Handle Results
-    if result_container["error"]:
-        st.error(f"Execution Failed: {result_container['error']}")
-    
-    elif result_container["result"]:
-        result = result_container["result"]
-        st.markdown("---")
-        st.subheader("📦 Final Deliverables")
-        
-        tab1, tab2, tab3, tab4 = st.tabs(["💻 Code", "🛡️ Review Report", "📚 Documentation", "🔍 Raw Data"])
-        
-        with tab1:
-            code = result.get('refined_code') 
-            if not code or code == "None": 
-                code = result.get('generated_code')
-            st.code(code, language='python')
+    # Try running up to 3 attempts
+    attempts = 0
+    while attempts < 3:
+        attempts += 1
+        q.put(f"[Docker] Attempt {attempts}...")
+        res = run_code_in_subprocess(code, timeout=60)
+        stdout = res.get("stdout", "")
+        stderr = res.get("stderr", "")
+        if res.get("status") == "success" and res.get("returncode") == 0:
+            q.put("[Docker] Execution successful!")
+            break
+        else:
+            q.put(f"[Docker] Execution failed: {stderr or 'Unknown error'}")
+            q.put("[Docker] Junior Developer fixing code and retrying...")
+            # naive "fix": just try again (replace with actual AI refinement if integrated)
+            time.sleep(1)
+    q.put("[Docker] Docker execution finished.")
 
-        with tab2:
-            st.markdown(result['review_report'])
-            
-        with tab3:
-            st.markdown(result['documentation'])
-            
-        with tab4:
-            st.json(result)
-            st.write(f"Decision: {result.get('decision')}")
+# -------------------------
+# Initialize session_state
+# -------------------------
+if "crew_queue" not in st.session_state:
+    st.session_state["crew_queue"] = queue.Queue()
+if "crew_result" not in st.session_state:
+    st.session_state["crew_result"] = {"result": None, "error": None}
+if "log_lines" not in st.session_state:
+    st.session_state["log_lines"] = []
+if "crew_running" not in st.session_state:
+    st.session_state["crew_running"] = False
+if "docker_done" not in st.session_state:
+    st.session_state["docker_done"] = False
 
-elif run_btn and not requirements:
-    st.warning("Please enter requirements first.")
+# -------------------------
+# Start Crew thread
+# -------------------------
+if run_crew_btn and not st.session_state["crew_running"]:
+    if not requirements.strip():
+        st.warning("Please enter requirements first.")
+    else:
+        st.session_state["crew_running"] = True
+        st.session_state["crew_queue"] = queue.Queue()
+        st.session_state["crew_result"] = {"result": None, "error": None}
+        t = threading.Thread(
+            target=crew_runner,
+            args=(requirements, model, st.session_state["crew_queue"], st.session_state["crew_result"]),
+            daemon=True
+        )
+        t.start()
+
+# -------------------------
+# Left column: Agent logs
+# -------------------------
+with left_col:
+    st.subheader("Agent Logs")
+    log_placeholder = st.empty()
+
+# -------------------------
+# Right column: Docker execution logs
+# -------------------------
+with right_col:
+    st.subheader("Docker / Junior Dev Execution")
+    docker_placeholder = st.empty()
+
+# -------------------------
+# Poll queues and update UI
+# -------------------------
+log_lines = st.session_state["log_lines"]
+crew_queue = st.session_state.get("crew_queue")
+crew_result = st.session_state.get("crew_result")
+
+if crew_queue:
+    while not crew_queue.empty():
+        ln = crew_queue.get_nowait()
+        log_lines.append(ln)
+
+st.session_state["log_lines"] = log_lines
+log_placeholder.markdown(
+    "<div class='terminal'>" + "<br>".join(log_lines) + "</div>", unsafe_allow_html=True
+)
+
+# -------------------------
+# Launch Docker run automatically if Crew finished
+# -------------------------
+if crew_result.get("result") and not st.session_state["docker_done"]:
+    code_to_run = crew_result["result"].get("refined_code") or crew_result["result"].get("generated_code")
+    if code_to_run:
+        st.session_state["docker_done"] = True
+        docker_queue = queue.Queue()
+        t = threading.Thread(target=run_junior_dev_docker, args=(code_to_run, docker_queue), daemon=True)
+        t.start()
+        st.session_state["docker_queue"] = docker_queue
+
+# -------------------------
+# Poll Docker queue
+# -------------------------
+docker_queue = st.session_state.get("docker_queue")
+docker_lines = st.session_state.get("docker_lines", [])
+if docker_queue:
+    while not docker_queue.empty():
+        ln = docker_queue.get_nowait()
+        docker_lines.append(ln)
+st.session_state["docker_lines"] = docker_lines
+docker_placeholder.markdown(
+    "<div class='terminal'>" + "<br>".join(docker_lines) + "</div>", unsafe_allow_html=True
+)
+
+# -------------------------
+# Display final deliverables
+# -------------------------
+if crew_result.get("error"):
+    st.error("Crew Error: " + str(crew_result["error"]))
+elif crew_result.get("result"):
+    st.markdown("---")
+    st.subheader("Final Deliverables")
+    r = crew_result["result"]
+    st.markdown("### Generated / Refined Code (first 5000 chars):")
+    st.code((r.get("refined_code") or r.get("generated_code") or "No code"), language="python")
+    st.markdown("### Review Report")
+    st.write(r.get("review_report", "—"))
+    st.markdown("### Documentation")
+    st.write(r.get("documentation", "—"))
