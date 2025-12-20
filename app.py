@@ -1,242 +1,266 @@
-# app.py
-import streamlit as st
-import sys
-import threading
-import queue
-import importlib
+# app.py - FastAPI Backend
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
 import os
 import re
+import subprocess
+import sys
+import json
+from datetime import datetime
+import asyncio
+import threading
+import queue
 import time
-from typing import Dict
 
-# Import Crew runner and sandbox tools
-from tools.sandbox_subprocess import run_code_in_subprocess
+# Import your existing crew functions
+try:
+    from main import run_software_crew
+    from crewai import Crew, Process
+    from tasks.tasks import SoftwareTasks
+    from agents.config import code_generator, code_reviewer, code_refiner, doc_writer, decision_maker
+    CREW_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import crew modules: {e}")
+    CREW_AVAILABLE = False
+    # Create a mock function for testing
+    def run_software_crew(requirements: str):
+        return {
+            "generated_code": "# Mock code for testing\nprint('Hello from mock crew')",
+            "review_report": "Mock review report",
+            "decision": "Mock decision",
+            "refined_code": "# Mock refined code",
+            "documentation": "Mock documentation"
+        }
 
-# -------------------------
-# Page config and CSS
-# -------------------------
-st.set_page_config(page_title="AI Software Crew", page_icon="🤖", layout="wide")
-st.markdown("""
-<style>
-body { background: #0b1220; color: #cfe8ff; }
-.panel { padding: 10px; }
-.terminal {
-  background: #000;
-  color: #66ff99;
-  padding: 12px;
-  border-radius: 6px;
-  height: 520px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  font-family: "Consolas", monospace;
-  border: 1px solid #222;
-}
-.panel-title { font-weight: 600; margin-bottom: 8px; }
-.btn { background: #0b5cff; color: #fff; padding: 8px 12px; border-radius: 6px; }
-.small { font-size: 12px; color: #9fb0c8; }
-</style>
-""", unsafe_allow_html=True)
+app = FastAPI(
+    title="AI Software Crew API",
+    description="Autonomous AI software development team backend",
+    version="2.0.0"
+)
 
-st.title("🤖 AI Software Crew — Live Execution")
+# Configure CORS for Next.js frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# -------------------------
-# Layout: left = logs, right = Docker execution
-# -------------------------
-left_col, right_col = st.columns([2, 2])
+# Request/Response models
+class CrewRequest(BaseModel):
+    prompt: str
+    max_iterations: Optional[int] = 3
+    model: Optional[str] = "mistral:7b-instruct"
+    temperature: Optional[float] = 0.2
+    max_tokens: Optional[int] = 1200
 
-# -------------------------
-# Sidebar controls
-# -------------------------
-with st.sidebar:
-    st.header("Mission Control")
-    model = st.selectbox("Model", ["mistral:7b-instruct", "codellama:13b"], index=0)
-    temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
-    max_tokens = st.number_input("Max tokens", min_value=128, max_value=4000, value=1200, step=50)
-    requirements = st.text_area(
-        "Requirements for Crew",
-        height=220,
-        placeholder="e.g., Create a CLI app that prints Fibonacci numbers"
-    )
-    run_crew_btn = st.button("🚀 Run Crew")
+class CrewResponse(BaseModel):
+    success: bool
+    task_id: Optional[str] = None
+    message: str
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    timestamp: str
 
-# -------------------------
-# Thread-safe queue logger
-# -------------------------
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    status: str  # pending, running, completed, failed
+    progress: Optional[float] = None  # 0 to 100
+    logs: Optional[list] = None
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+# In-memory storage for tasks (in production, use Redis or database)
+tasks = {}
+task_logs = {}
+
+# Queue logger for capturing crew output
 class QueueLogger:
-    def __init__(self, q: queue.Queue):
-        self.q = q
+    def __init__(self, task_id: str):
+        self.task_id = task_id
         self.ansi = re.compile(r'\x1B[@-_][0-?]*[ -/]*[@-~]')
-
+        
     def write(self, message):
         if not message:
             return
         clean = self.ansi.sub("", str(message)).strip()
         if clean:
-            self.q.put(clean)
-
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] {clean}"
+            if self.task_id in task_logs:
+                task_logs[self.task_id].append(log_entry)
+            else:
+                task_logs[self.task_id] = [log_entry]
+    
     def flush(self):
         pass
 
-# -------------------------
-# Crew runner thread
-# -------------------------
-def crew_runner(req_text: str, mdl: str, q: queue.Queue, result_holder: Dict):
-    os.environ["OPENAI_MODEL_NAME"] = mdl
-    os.environ["OPENAI_TEMPERATURE"] = str(temp)
-    os.environ["OPENAI_MAX_TOKENS"] = str(max_tokens)
-
-    # Dynamic import of main.py
+# Background task runner
+def run_crew_in_background(task_id: str, prompt: str, model: str, temperature: float, max_tokens: int):
+    """Run the software crew in a background thread"""
     try:
-        if "main" in sys.modules:
-            del sys.modules["main"]
-        import main
-        importlib.reload(main)
+        # Update task status
+        tasks[task_id]["status"] = "running"
+        tasks[task_id]["progress"] = 10
+        
+        # Set environment variables
+        os.environ["OPENAI_MODEL_NAME"] = model
+        os.environ["OPENAI_TEMPERATURE"] = str(temperature)
+        os.environ["OPENAI_MAX_TOKENS"] = str(max_tokens)
+        
+        # Capture stdout
+        import sys
+        old_stdout = sys.stdout
+        sys.stdout = QueueLogger(task_id)
+        
+        # Add initial log
+        logger = QueueLogger(task_id)
+        logger.write(f"Starting AI Software Crew with prompt: {prompt[:100]}...")
+        logger.write(f"Using model: {model}")
+        
+        tasks[task_id]["progress"] = 30
+        
+        try:
+            # Run the crew
+            result = run_software_crew(prompt)
+            
+            # Update task with result
+            tasks[task_id]["status"] = "completed"
+            tasks[task_id]["progress"] = 100
+            tasks[task_id]["result"] = result
+            tasks[task_id]["error"] = None
+            
+            logger.write("✓ Crew execution completed successfully!")
+            
+        except Exception as e:
+            error_msg = f"Crew execution failed: {str(e)}"
+            logger.write(f"✗ {error_msg}")
+            tasks[task_id]["status"] = "failed"
+            tasks[task_id]["error"] = error_msg
+            tasks[task_id]["result"] = None
+            
+        finally:
+            sys.stdout = old_stdout
+            
     except Exception as e:
-        q.put(f"[ERROR] Failed to import main.py: {e}")
-        result_holder["error"] = str(e)
-        return
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["error"] = f"Background task error: {str(e)}"
 
-    old_stdout = sys.stdout
-    sys.stdout = QueueLogger(q)
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "service": "AI Software Crew API",
+        "version": "2.0.0",
+        "status": "running",
+        "crew_available": CREW_AVAILABLE,
+        "endpoints": {
+            "POST /api/run-crew": "Start a new crew execution",
+            "GET /api/task/{task_id}": "Get task status and result",
+            "GET /api/health": "Health check"
+        }
+    }
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "crew_status": "available" if CREW_AVAILABLE else "mock_mode"
+    }
+
+@app.post("/api/run-crew", response_model=CrewResponse)
+async def run_crew(request: CrewRequest):
+    """Start a new AI software crew execution"""
     try:
-        q.put("[Crew] Starting run_software_crew()")
-        out = main.run_software_crew(req_text)
-        q.put("[Crew] Completed run_software_crew()")
-        result_holder["result"] = out
-    except Exception as e:
-        q.put(f"[Crew ERROR] {e}")
-        result_holder["error"] = str(e)
-    finally:
-        sys.stdout = old_stdout
-
-# -------------------------
-# Junior Dev Docker runner
-# -------------------------
-def run_junior_dev_docker(code: str, q: queue.Queue):
-    q.put("[Docker] Junior Developer running code in Docker...")
-    # For simplicity, using sandbox runner (replace with Docker API if desired)
-    def stream(line: str, is_err: bool):
-        prefix = "[stderr]" if is_err else "[stdout]"
-        q.put(f"{prefix} {line}")
-
-    # Try running up to 3 attempts
-    attempts = 0
-    while attempts < 3:
-        attempts += 1
-        q.put(f"[Docker] Attempt {attempts}...")
-        res = run_code_in_subprocess(code, timeout=60)
-        stdout = res.get("stdout", "")
-        stderr = res.get("stderr", "")
-        if res.get("status") == "success" and res.get("returncode") == 0:
-            q.put("[Docker] Execution successful!")
-            break
-        else:
-            q.put(f"[Docker] Execution failed: {stderr or 'Unknown error'}")
-            q.put("[Docker] Junior Developer fixing code and retrying...")
-            # naive "fix": just try again (replace with actual AI refinement if integrated)
-            time.sleep(1)
-    q.put("[Docker] Docker execution finished.")
-
-# -------------------------
-# Initialize session_state
-# -------------------------
-if "crew_queue" not in st.session_state:
-    st.session_state["crew_queue"] = queue.Queue()
-if "crew_result" not in st.session_state:
-    st.session_state["crew_result"] = {"result": None, "error": None}
-if "log_lines" not in st.session_state:
-    st.session_state["log_lines"] = []
-if "crew_running" not in st.session_state:
-    st.session_state["crew_running"] = False
-if "docker_done" not in st.session_state:
-    st.session_state["docker_done"] = False
-
-# -------------------------
-# Start Crew thread
-# -------------------------
-if run_crew_btn and not st.session_state["crew_running"]:
-    if not requirements.strip():
-        st.warning("Please enter requirements first.")
-    else:
-        st.session_state["crew_running"] = True
-        st.session_state["crew_queue"] = queue.Queue()
-        st.session_state["crew_result"] = {"result": None, "error": None}
-        t = threading.Thread(
-            target=crew_runner,
-            args=(requirements, model, st.session_state["crew_queue"], st.session_state["crew_result"]),
+        # Generate unique task ID
+        task_id = f"crew_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hash(request.prompt) % 10000:04d}"
+        
+        # Initialize task
+        tasks[task_id] = {
+            "status": "pending",
+            "progress": 0,
+            "prompt": request.prompt,
+            "model": request.model,
+            "created_at": datetime.now().isoformat(),
+            "result": None,
+            "error": None
+        }
+        task_logs[task_id] = []
+        
+        # Start background task
+        thread = threading.Thread(
+            target=run_crew_in_background,
+            args=(task_id, request.prompt, request.model, request.temperature, request.max_tokens),
             daemon=True
         )
-        t.start()
+        thread.start()
+        
+        return CrewResponse(
+            success=True,
+            task_id=task_id,
+            message="AI Software Crew started successfully. Use the task_id to check status.",
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start crew: {str(e)}")
 
-# -------------------------
-# Left column: Agent logs
-# -------------------------
-with left_col:
-    st.subheader("Agent Logs")
-    log_placeholder = st.empty()
+@app.get("/api/task/{task_id}", response_model=TaskStatusResponse)
+async def get_task_status(task_id: str):
+    """Get the status of a crew execution task"""
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task = tasks[task_id]
+    
+    return TaskStatusResponse(
+        task_id=task_id,
+        status=task["status"],
+        progress=task.get("progress", 0),
+        logs=task_logs.get(task_id, []),
+        result=task.get("result"),
+        error=task.get("error")
+    )
 
-# -------------------------
-# Right column: Docker execution logs
-# -------------------------
-with right_col:
-    st.subheader("Docker / Junior Dev Execution")
-    docker_placeholder = st.empty()
+@app.get("/api/task/{task_id}/logs")
+async def get_task_logs(task_id: str, limit: int = 50):
+    """Get logs for a specific task"""
+    if task_id not in task_logs:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    logs = task_logs[task_id]
+    if limit > 0:
+        logs = logs[-limit:]
+    
+    return {
+        "task_id": task_id,
+        "logs": logs,
+        "count": len(logs),
+        "total": len(task_logs[task_id])
+    }
 
-# -------------------------
-# Poll queues and update UI
-# -------------------------
-log_lines = st.session_state["log_lines"]
-crew_queue = st.session_state.get("crew_queue")
-crew_result = st.session_state.get("crew_result")
+@app.post("/api/test-crew")
+async def test_crew(request: CrewRequest):
+    """Quick test endpoint (runs synchronously)"""
+    try:
+        result = run_software_crew(request.prompt)
+        return {
+            "success": True,
+            "message": "Test completed successfully",
+            "result": result,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-if crew_queue:
-    while not crew_queue.empty():
-        ln = crew_queue.get_nowait()
-        log_lines.append(ln)
-
-st.session_state["log_lines"] = log_lines
-log_placeholder.markdown(
-    "<div class='terminal'>" + "<br>".join(log_lines) + "</div>", unsafe_allow_html=True
-)
-
-# -------------------------
-# Launch Docker run automatically if Crew finished
-# -------------------------
-if crew_result.get("result") and not st.session_state["docker_done"]:
-    code_to_run = crew_result["result"].get("refined_code") or crew_result["result"].get("generated_code")
-    if code_to_run:
-        st.session_state["docker_done"] = True
-        docker_queue = queue.Queue()
-        t = threading.Thread(target=run_junior_dev_docker, args=(code_to_run, docker_queue), daemon=True)
-        t.start()
-        st.session_state["docker_queue"] = docker_queue
-
-# -------------------------
-# Poll Docker queue
-# -------------------------
-docker_queue = st.session_state.get("docker_queue")
-docker_lines = st.session_state.get("docker_lines", [])
-if docker_queue:
-    while not docker_queue.empty():
-        ln = docker_queue.get_nowait()
-        docker_lines.append(ln)
-st.session_state["docker_lines"] = docker_lines
-docker_placeholder.markdown(
-    "<div class='terminal'>" + "<br>".join(docker_lines) + "</div>", unsafe_allow_html=True
-)
-
-# -------------------------
-# Display final deliverables
-# -------------------------
-if crew_result.get("error"):
-    st.error("Crew Error: " + str(crew_result["error"]))
-elif crew_result.get("result"):
-    st.markdown("---")
-    st.subheader("Final Deliverables")
-    r = crew_result["result"]
-    st.markdown("### Generated / Refined Code (first 5000 chars):")
-    st.code((r.get("refined_code") or r.get("generated_code") or "No code"), language="python")
-    st.markdown("### Review Report")
-    st.write(r.get("review_report", "—"))
-    st.markdown("### Documentation")
-    st.write(r.get("documentation", "—"))
+if __name__ == "__main__":
+    import uvicorn
+    print("Starting AI Software Crew API server...")
+    print(f"Crew available: {CREW_AVAILABLE}")
+    print("API Documentation: http://localhost:8000/docs")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
