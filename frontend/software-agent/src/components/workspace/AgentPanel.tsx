@@ -15,11 +15,13 @@ interface AgentPanelProps {
   } | null;
 }
 
+type AgentStatus = "Idle" | "Thinking" | "Approved" | "Error";
+
 const initialAgents = [
   {
     name: "Planner",
     role: "Architect",
-    status: "Idle" as const,
+    status: "Idle" as AgentStatus,
     confidence: 95,
     errors: 0,
     statusMessage: "Awaiting task assignment",
@@ -28,7 +30,7 @@ const initialAgents = [
   {
     name: "Coder",
     role: "Full Stack Dev",
-    status: "Idle" as const,
+    status: "Idle" as AgentStatus,
     confidence: 92,
     errors: 0,
     statusMessage: "Standing by for requirements",
@@ -37,7 +39,7 @@ const initialAgents = [
   {
     name: "Tester",
     role: "QA Engineer",
-    status: "Idle" as const,
+    status: "Idle" as AgentStatus,
     confidence: 88,
     errors: 0,
     statusMessage: "Ready for testing phase",
@@ -46,7 +48,7 @@ const initialAgents = [
   {
     name: "Debugger",
     role: "Troubleshooter",
-    status: "Idle" as const,
+    status: "Idle" as AgentStatus,
     confidence: 90,
     errors: 0,
     statusMessage: "Monitoring system health",
@@ -55,7 +57,7 @@ const initialAgents = [
   {
     name: "Reviewer",
     role: "Code Reviewer",
-    status: "Idle" as const,
+    status: "Idle" as AgentStatus,
     confidence: 87,
     errors: 0,
     statusMessage: "Ready for code review",
@@ -64,7 +66,7 @@ const initialAgents = [
   {
     name: "Refiner",
     role: "Code Refiner",
-    status: "Idle" as const,
+    status: "Idle" as AgentStatus,
     confidence: 85,
     errors: 0,
     statusMessage: "Waiting for code to refine",
@@ -248,7 +250,7 @@ export function AgentPanel({ taskStatus }: AgentPanelProps) {
   const activeCount = agents.filter(a => a.isWorking || a.status === "Thinking").length;
 
   return (
-    <Card className="h-full border-none rounded-none border-r border-[#1F1F1F] bg-[#050505] w-[300px] flex flex-col">
+    <Card className="h-full border-none rounded-none border-r border-[#1F1F1F] bg-[#050505] w-75 flex flex-col">
       <CardHeader className="pb-4 pt-5 px-5 border-b border-[#1F1F1F]">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-zinc-100">

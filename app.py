@@ -25,14 +25,14 @@ except ImportError as e:
     print(f"Warning: Could not import crew modules: {e}")
     CREW_AVAILABLE = False
     # Create a mock function for testing
-    def run_software_crew(requirements: str):
-        return {
-            "generated_code": "# Mock code for testing\nprint('Hello from mock crew')",
-            "review_report": "Mock review report",
-            "decision": "Mock decision",
-            "refined_code": "# Mock refined code",
-            "documentation": "Mock documentation"
-        }
+    # def run_software_crew(requirements: str):
+    #     return {
+    #         "generated_code": "# Mock code for testing\nprint('Hello from mock crew')",
+    #         "review_report": "Mock review report",
+    #         "decision": "Mock decision",
+    #         "refined_code": "# Mock refined code",
+    #         "documentation": "Mock documentation"
+    #     }
 
 app = FastAPI(
     title="AI Software Crew API",
