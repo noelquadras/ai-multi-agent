@@ -18,7 +18,7 @@ ollama_llm = LLM(
 
 # --- Agent Definitions ---
 
-# Agent 1: Code Generator (The Senior Developer)
+# Agent 1: Code Generator (The Senior Developer) 
 code_generator = Agent(
     role='Senior Software Developer',
     goal='Write high-quality, clean, modular, and efficient code based on user requirements.',

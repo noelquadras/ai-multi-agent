@@ -254,8 +254,8 @@ export default function Home() {
       </nav>
 
       {/* Background Gradients */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-[600px] bg-purple-900/20 blur-[120px] rounded-full pointer-events-none" />
-      <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-indigo-900/10 blur-[100px] rounded-full pointer-events-none" />
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-150 bg-purple-900/20 blur-[120px] rounded-full pointer-events-none" />
+      <div className="absolute bottom-0 right-0 w-125 h-125 bg-indigo-900/10 blur-[100px] rounded-full pointer-events-none" />
 
       <div className="relative z-10 flex flex-col items-center justify-center pt-32 pb-20 px-4">
         {/* Version Badge */}
@@ -269,7 +269,7 @@ export default function Home() {
         {/* Hero Title */}
         <h1 className="text-center text-6xl md:text-8xl font-bold tracking-tight mb-6 leading-[1.1]">
           Autonomous<br />
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-400">
+          <span className="text-transparent bg-clip-text bg-linear-to-r from-purple-400 to-indigo-400">
             AI Software Team
           </span>
         </h1>
@@ -283,7 +283,7 @@ export default function Home() {
         {apiStatus === "offline" && (
           <div className="mb-6 p-4 bg-red-900/30 border border-red-800 rounded-lg max-w-2xl w-full">
             <div className="flex items-start">
-              <AlertCircle className="w-5 h-5 text-red-400 mr-3 mt-0.5 flex-shrink-0" />
+              <AlertCircle className="w-5 h-5 text-red-400 mr-3 mt-0.5 shrink-0" />
               <div>
                 <p className="font-medium text-red-300">Backend API is offline</p>
                 <p className="text-sm text-red-400/80 mt-1">
@@ -314,7 +314,7 @@ export default function Home() {
                 </div>
                 <div className="w-full bg-gray-800 rounded-full h-2">
                   <div 
-                    className="bg-gradient-to-r from-purple-500 to-indigo-500 h-2 rounded-full transition-all duration-300"
+                    className="bg-linear-to-r from-purple-500 to-indigo-500 h-2 rounded-full transition-all duration-300"
                     style={{ width: `${taskStatus.progress}%` }}
                   ></div>
                 </div>
@@ -374,13 +374,13 @@ export default function Home() {
 
         {/* Input Card */}
         <div className="w-full max-w-3xl relative group">
-          <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-500/20 to-indigo-500/20 rounded-2xl blur opacity-75 group-hover:opacity-100 transition duration-1000"></div>
+          <div className="absolute -inset-0.5 bg-linear-to-r from-purple-500/20 to-indigo-500/20 rounded-2xl blur opacity-75 group-hover:opacity-100 transition duration-1000"></div>
           <div className="relative bg-[#0A0A0A] border border-[#1F1F1F] rounded-2xl p-4 shadow-2xl">
-            <div className="min-h-[200px] relative">
+            <div className="min-h-50 relative">
               <Textarea
                 onChange={handleTextareaChange} 
                 placeholder="Describe the application you want to build..."
-                className="w-full h-full min-h-[180px] bg-transparent border-none resize-none text-lg text-zinc-300 placeholder:text-zinc-600 focus-visible:ring-0 p-4"
+                className="w-full h-full min-h-45 bg-transparent border-none resize-none text-lg text-zinc-300 placeholder:text-zinc-600 focus-visible:ring-0 p-4"
                 disabled={isRunning}
                 value={prompt}
               />
