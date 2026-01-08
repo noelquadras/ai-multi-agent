@@ -36,9 +36,21 @@ interface TaskStatus {
   status: "pending" | "running" | "completed" | "failed";
   progress?: number;
   logs?: string[];
+  agents?: AgentStatus[];
   result?: CrewResult;
   error?: string;
 }
+
+interface AgentStatus {
+  id: string;
+  name: string;
+  role: string;
+  status: "idle" | "working" | "completed" | "error";
+  currentTask?: string;
+  progress?: number;
+  logs?: string[];
+}
+
 
 export default function WorkspacePage() {
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
@@ -49,6 +61,19 @@ export default function WorkspacePage() {
   );
   const [logs, setLogs] = useState<string[]>([]);
   const { taskId, prompt } = useExecution();
+  
+  const checkApiHealth = async () => {
+    try {
+      const response = await fetch("http://localhost:8000/api/health");
+      if (response.ok) {
+        setApiStatus("online");
+      } else {
+        setApiStatus("offline");
+      }
+    } catch (error) {
+      setApiStatus("offline");
+    }
+  };
 
   // Check API health on mount
   useEffect(() => {
@@ -86,19 +111,6 @@ export default function WorkspacePage() {
       </div>
     );
   }
-
-  const checkApiHealth = async () => {
-    try {
-      const response = await fetch("http://localhost:8000/api/health");
-      if (response.ok) {
-        setApiStatus("online");
-      } else {
-        setApiStatus("offline");
-      }
-    } catch (error) {
-      setApiStatus("offline");
-    }
-  };
 
   const fetchTaskStatus = async (id: string) => {
     try {
@@ -268,7 +280,7 @@ export default function WorkspacePage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar: Agents */}
         <div className="flex-none hidden md:block">
-          <AgentPanel taskStatus={taskStatus} />
+          <AgentPanel agents={taskStatus?.agents}/>
         </div>
 
         {/* Center/Right Area */}

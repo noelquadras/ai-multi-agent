@@ -134,7 +134,7 @@ export function AgentCard({ name, role, status, confidence, errors, statusMessag
                     </div>
                     <div className="h-1 w-full bg-zinc-900 rounded-full overflow-hidden">
                         <div
-                            className="h-full rounded-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
+                            className="h-full rounded-full bg-linear-to-r from-blue-500 to-purple-500 transition-all duration-300"
                             style={{ width: `${taskProgress}%` }}
                         />
                     </div>

@@ -14,6 +14,35 @@ import threading
 import queue
 import time
 
+AGENT_TEMPLATES = {
+    "planner": {
+        "id": "planner",
+        "name": "Planner",
+        "role": "Architect",
+    },
+    "coder": {
+        "id": "coder",
+        "name": "Coder",
+        "role": "Full Stack Dev",
+    },
+    "reviewer": {
+        "id": "reviewer",
+        "name": "Reviewer",
+        "role": "Code Reviewer",
+    },
+    "refiner": {
+        "id": "refiner",
+        "name": "Refiner",
+        "role": "Code Refiner",
+    },
+    "tester": {
+        "id": "tester",
+        "name": "Tester",
+        "role": "QA Engineer",
+    },
+}
+
+
 # Import your existing crew functions
 try:
     from main import run_software_crew
@@ -188,7 +217,16 @@ async def run_crew(request: CrewRequest):
             "model": request.model,
             "created_at": datetime.now().isoformat(),
             "result": None,
-            "error": None
+            "error": None,
+            "agents": {
+                k: {
+                    **v,
+                    "status": "idle",
+                    "current_task": None,
+                    "progress": 0,
+                }
+                for k, v in AGENT_TEMPLATES.items()
+            }
         }
         task_logs[task_id] = []
         
@@ -223,6 +261,7 @@ async def get_task_status(task_id: str):
         status=task["status"],
         progress=task.get("progress", 0),
         logs=task_logs.get(task_id, []),
+        agents=list(task.get("agents", {}).values()),
         result=task.get("result"),
         error=task.get("error")
     )
