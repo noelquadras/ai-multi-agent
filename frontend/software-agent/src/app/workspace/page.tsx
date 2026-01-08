@@ -1,16 +1,27 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useState, useEffect } from "react";
 import { AgentPanel } from "@/components/workspace/AgentPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
 import { ActivityPanel } from "@/components/workspace/ActivityPanel";
 import { PreviewPanel } from "@/components/workspace/PreviewPanel";
-import { Box, Play, Share2, Settings, Loader2, CheckCircle, AlertCircle, Code, FileText, Copy, RefreshCw } from "lucide-react";
+import {
+  Box,
+  Play,
+  Share2,
+  Settings,
+  Loader2,
+  CheckCircle,
+  AlertCircle,
+  Code,
+  FileText,
+  Copy,
+  RefreshCw,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 // import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { usePrompt } from "@/app/context/PromptContext";
+import { useExecution } from "@/app/context/ExecutionContext";
 
 interface CrewResult {
   generated_code?: string;
@@ -30,14 +41,14 @@ interface TaskStatus {
 }
 
 export default function WorkspacePage() {
-  const searchParams = useSearchParams();
-  const taskId = searchParams.get('task_id');
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('code');
-  const [apiStatus, setApiStatus] = useState<"online" | "offline" | "checking">("checking");
+  const [activeTab, setActiveTab] = useState("code");
+  const [apiStatus, setApiStatus] = useState<"online" | "offline" | "checking">(
+    "checking"
+  );
   const [logs, setLogs] = useState<string[]>([]);
-  const { prompt } = usePrompt();
+  const { taskId, prompt } = useExecution();
 
   // Check API health on mount
   useEffect(() => {
@@ -56,17 +67,25 @@ export default function WorkspacePage() {
   // Poll task status if it's running
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    
+
     if (taskId && taskStatus?.status === "running") {
       interval = setInterval(() => {
         fetchTaskStatus(taskId);
       }, 2000);
     }
-    
+
     return () => {
       if (interval) clearInterval(interval);
     };
   }, [taskId, taskStatus?.status]);
+
+  if (!taskId) {
+    return (
+      <div className="flex h-screen items-center justify-center text-gray-400">
+        No active task. Start one from the home page.
+      </div>
+    );
+  }
 
   const checkApiHealth = async () => {
     try {
@@ -86,15 +105,15 @@ export default function WorkspacePage() {
       const response = await fetch(`http://localhost:8000/api/task/${id}`);
       const data: TaskStatus = await response.json();
       setTaskStatus(data);
-      
+
       // Update logs
       if (data.logs) {
         setLogs(data.logs);
       }
-      
+
       setLoading(false);
     } catch (error) {
-      console.error('Error fetching task status:', error);
+      console.error("Error fetching task status:", error);
       setLoading(false);
     }
   };
@@ -184,7 +203,9 @@ export default function WorkspacePage() {
               <Box className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-sm font-bold text-white tracking-widest uppercase">Nexus Core</h1>
+              <h1 className="text-sm font-bold text-white tracking-widest uppercase">
+                Nexus Core
+              </h1>
               <p className="text-[10px] text-zinc-500 font-medium">Workspace</p>
             </div>
           </div>
@@ -192,9 +213,13 @@ export default function WorkspacePage() {
           <div className="h-8 w-px bg-[#1F1F1F]" />
 
           <div className="flex flex-col">
-            <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Active Construct</span>
+            <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">
+              Active Construct
+            </span>
             <span className="text-xs text-zinc-300 font-medium">
-              {taskStatus ? `Task: ${taskStatus.task_id.substring(0, 8)}...` : 'No Active Task'}
+              {taskStatus
+                ? `Task: ${taskStatus.task_id.substring(0, 8)}...`
+                : "No Active Task"}
             </span>
           </div>
         </div>
@@ -204,7 +229,7 @@ export default function WorkspacePage() {
           <div className="flex items-center gap-3">
             {renderApiStatusBadge()}
             {taskStatus && renderStatusBadge()}
-            
+
             {taskStatus && (
               <Button
                 variant="ghost"
@@ -221,7 +246,9 @@ export default function WorkspacePage() {
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#110C1D] border border-purple-500/30">
             <div className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
             <span className="text-[10px] font-bold text-purple-300 tracking-wider">
-              {taskStatus?.status === 'running' ? 'AGENTS WORKING' : 'INTELLIGENCE SYNCHRONIZED'}
+              {taskStatus?.status === "running"
+                ? "AGENTS WORKING"
+                : "INTELLIGENCE SYNCHRONIZED"}
             </span>
           </div>
 
@@ -260,25 +287,31 @@ export default function WorkspacePage() {
                       </span>
                       {taskStatus.progress !== undefined && (
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-400">Progress:</span>
+                          <span className="text-xs text-gray-400">
+                            Progress:
+                          </span>
                           <div className="w-32 bg-gray-800 rounded-full h-1.5">
-                            <div 
+                            <div
                               className="bg-linear-to-r from-purple-500 to-indigo-500 h-1.5 rounded-full transition-all duration-300"
                               style={{ width: `${taskStatus.progress}%` }}
                             ></div>
                           </div>
-                          <span className="text-xs text-gray-300 w-8">{taskStatus.progress}%</span>
+                          <span className="text-xs text-gray-300 w-8">
+                            {taskStatus.progress}%
+                          </span>
                         </div>
                       )}
                     </div>
-                    
+
                     {taskStatus.result && (
                       <div className="flex gap-2">
                         {taskStatus.result.refined_code && (
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => copyToClipboard(taskStatus.result!.refined_code!)}
+                            onClick={() =>
+                              copyToClipboard(taskStatus.result!.refined_code!)
+                            }
                             className="border-gray-700 h-7 text-xs"
                           >
                             <Copy className="w-3 h-3 mr-1" />
