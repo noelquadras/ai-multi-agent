@@ -10,6 +10,7 @@ import { Box, Play, Share2, Settings, Loader2, CheckCircle, AlertCircle, Code, F
 import { Button } from "@/components/ui/button";
 // import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { usePrompt } from "@/app/context/PromptContext";
 
 interface CrewResult {
   generated_code?: string;
@@ -36,6 +37,7 @@ export default function WorkspacePage() {
   const [activeTab, setActiveTab] = useState('code');
   const [apiStatus, setApiStatus] = useState<"online" | "offline" | "checking">("checking");
   const [logs, setLogs] = useState<string[]>([]);
+  const { prompt } = usePrompt();
 
   // Check API health on mount
   useEffect(() => {
@@ -187,7 +189,7 @@ export default function WorkspacePage() {
             </div>
           </div>
 
-          <div className="h-8 w-[1px] bg-[#1F1F1F]" />
+          <div className="h-8 w-px bg-[#1F1F1F]" />
 
           <div className="flex flex-col">
             <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Active Construct</span>
@@ -261,7 +263,7 @@ export default function WorkspacePage() {
                           <span className="text-xs text-gray-400">Progress:</span>
                           <div className="w-32 bg-gray-800 rounded-full h-1.5">
                             <div 
-                              className="bg-gradient-to-r from-purple-500 to-indigo-500 h-1.5 rounded-full transition-all duration-300"
+                              className="bg-linear-to-r from-purple-500 to-indigo-500 h-1.5 rounded-full transition-all duration-300"
                               style={{ width: `${taskStatus.progress}%` }}
                             ></div>
                           </div>
