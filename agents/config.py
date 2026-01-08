@@ -11,7 +11,7 @@ load_dotenv()
 # We use the generic LLM class to explicitly define the provider and base_url
 # This prevents CrewAI from defaulting to the standard OpenAI endpoint.
 ollama_llm = LLM(
-    model="ollama/mistral:7b-instruct", # Prefix with 'ollama/' is critical for some versions
+    model="ollama/deepseek-coder-v2:16b", # Prefix with 'ollama/' is critical for some versions
     base_url="http://localhost:11434"
 )
 # ---------------------------------------
