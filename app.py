@@ -1,10 +1,12 @@
-# app.py - FastAPI Backend (EVENT-DRIVEN + SSE)
+# =========================
+# SSE + EVENT EMITTER BACKEND (B)
+# =========================
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, List
 import re
 import sys
 import threading
@@ -12,30 +14,6 @@ import json
 import asyncio
 from datetime import datetime
 
-# =========================
-# AGENT TEMPLATES
-# =========================
-AGENT_TEMPLATES = {
-    "planner": {"id": "planner", "name": "Planner", "role": "Architect"},
-    "coder": {"id": "coder", "name": "Coder", "role": "Full Stack Dev"},
-    "reviewer": {"id": "reviewer", "name": "Reviewer", "role": "Code Reviewer"},
-    "refiner": {"id": "refiner", "name": "Refiner", "role": "Code Refiner"},
-    "tester": {"id": "tester", "name": "Tester", "role": "QA Engineer"},
-}
-
-# =========================
-# IMPORT CREW
-# =========================
-try:
-    from main import run_software_crew
-    CREW_AVAILABLE = True
-except Exception as e:
-    print(f"CREW IMPORT FAILED: {e}")
-    CREW_AVAILABLE = False
-
-# =========================
-# FASTAPI APP
-# =========================
 app = FastAPI(title="AI Software Crew API", version="2.1.0")
 
 app.add_middleware(
@@ -47,53 +25,29 @@ app.add_middleware(
 )
 
 # =========================
-# MODELS
-# =========================
-class CrewRequest(BaseModel):
-    prompt: str
-    model: Optional[str] = "mistral:7b-instruct"
-    temperature: Optional[float] = 0.2
-    max_tokens: Optional[int] = 1200
-
-class CrewResponse(BaseModel):
-    success: bool
-    task_id: str
-    message: str
-    timestamp: str
-
-class TaskStatusResponse(BaseModel):
-    task_id: str
-    status: str
-    progress: int
-    logs: List[str]
-    events: List[Dict[str, Any]]
-    agents: List[Dict[str, Any]]
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-
-# =========================
 # STORAGE
 # =========================
 tasks: Dict[str, Dict[str, Any]] = {}
-task_logs: Dict[str, List[str]] = {}
 task_events: Dict[str, List[Dict[str, Any]]] = {}
+subscribers: Dict[str, List[asyncio.Queue]] = {}
 
 # =========================
-# LOGGER (EVENT-DRIVEN)
+# EVENT EMITTER
+# =========================
+def emit_event(task_id: str, event: Dict[str, Any]):
+    event["timestamp"] = datetime.now().isoformat()
+    task_events.setdefault(task_id, []).append(event)
+
+    for q in subscribers.get(task_id, []):
+        q.put_nowait(event)
+
+# =========================
+# LOGGER → EVENTS
 # =========================
 class QueueLogger:
     def __init__(self, task_id: str):
         self.task_id = task_id
         self.ansi = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
-
-    def emit_event(self, event_type: str, agent: Optional[str], message: str):
-        event = {
-            "type": event_type,
-            "agent": agent,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "message": message,
-        }
-        task_events[self.task_id].append(event)
 
     def write(self, message):
         if not message:
@@ -103,24 +57,27 @@ class QueueLogger:
         if not clean:
             return
 
-        ts = datetime.now().strftime("%H:%M:%S")
-        task_logs[self.task_id].append(f"[{ts}] {clean}")
+        start = re.search(r"\[AGENT_START\s+(\w+)\]", clean)
+        end = re.search(r"\[AGENT_END\s+(\w+)\]", clean)
 
-        start_match = re.search(r"\[AGENT_START\s+(\w+)\]", clean)
-        if start_match:
-            agent_id = start_match.group(1)
-            if agent_id in tasks[self.task_id]["agents"]:
-                tasks[self.task_id]["agents"][agent_id]["status"] = "thinking"
-                tasks[self.task_id]["agents"][agent_id]["message"] = "Working"
-                self.emit_event("agent_start", agent_id, "Agent started working")
+        if start:
+            emit_event(self.task_id, {
+                "type": "agent_start",
+                "agent": start.group(1),
+            })
+            return
 
-        end_match = re.search(r"\[AGENT_END\s+(\w+)\]", clean)
-        if end_match:
-            agent_id = end_match.group(1)
-            if agent_id in tasks[self.task_id]["agents"]:
-                tasks[self.task_id]["agents"][agent_id]["status"] = "approved"
-                tasks[self.task_id]["agents"][agent_id]["message"] = "Completed"
-                self.emit_event("agent_end", agent_id, "Agent completed task")
+        if end:
+            emit_event(self.task_id, {
+                "type": "agent_end",
+                "agent": end.group(1),
+            })
+            return
+
+        emit_event(self.task_id, {
+            "type": "log",
+            "message": clean,
+        })
 
     def flush(self):
         pass
@@ -128,117 +85,91 @@ class QueueLogger:
 # =========================
 # BACKGROUND RUNNER
 # =========================
-def run_crew_in_background(task_id: str, prompt: str, model: str, temperature: float, max_tokens: int):
+def run_crew(task_id: str, prompt: str):
+    from main import run_software_crew
+
     old_stdout = sys.stdout
     sys.stdout = QueueLogger(task_id)
 
     try:
         tasks[task_id]["status"] = "running"
-        tasks[task_id]["progress"] = 5
-        task_events[task_id].append({
-            "type": "crew_start",
-            "agent": None,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "message": "Crew execution started",
-        })
-
-        result = run_software_crew(prompt)
-
-        tasks[task_id]["progress"] = 100
+        run_software_crew(prompt)
         tasks[task_id]["status"] = "completed"
-        tasks[task_id]["result"] = result
-
-        task_events[task_id].append({
-            "type": "crew_end",
-            "agent": None,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "message": "Crew execution completed",
-        })
-
     except Exception as e:
         tasks[task_id]["status"] = "failed"
-        tasks[task_id]["error"] = str(e)
-        task_events[task_id].append({
-            "type": "error",
-            "agent": None,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "message": str(e),
+        emit_event(task_id, {
+            "type": "system_error",
+            "error": str(e),
         })
-
     finally:
         sys.stdout = old_stdout
+
+# =========================
+# MODELS
+# =========================
+class CrewRequest(BaseModel):
+    prompt: str
 
 # =========================
 # ROUTES
 # =========================
 @app.get("/api/health")
-async def health():
-    return {"status": "ok", "crew": CREW_AVAILABLE}
+async def health_check():
+    return {"status": "ok"}
 
-@app.post("/api/run-crew", response_model=CrewResponse)
-async def run_crew(req: CrewRequest):
+@app.post("/api/run-crew")
+async def run_crew_api(req: CrewRequest):
     task_id = f"crew_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    tasks[task_id] = {
-        "status": "pending",
-        "progress": 0,
-        "result": None,
-        "error": None,
-        "agents": {
-            k: {**v, "status": "idle", "message": "Waiting"}
-            for k, v in AGENT_TEMPLATES.items()
-        },
-    }
-
-    task_logs[task_id] = []
+    tasks[task_id] = {"status": "pending"}
     task_events[task_id] = []
+    subscribers[task_id] = []
 
     threading.Thread(
-        target=run_crew_in_background,
-        args=(task_id, req.prompt, req.model, req.temperature, req.max_tokens),
+        target=run_crew,
+        args=(task_id, req.prompt),
         daemon=True,
     ).start()
 
-    return CrewResponse(
-        success=True,
-        task_id=task_id,
-        message="Crew started",
-        timestamp=datetime.now().isoformat(),
-    )
+    return {"task_id": task_id}
 
-@app.get("/api/task/{task_id}", response_model=TaskStatusResponse)
-async def task_status(task_id: str):
+@app.get("/api/task/{task_id}/events")
+async def stream_events(task_id: str, request: Request):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    task = tasks[task_id]
-
-    return TaskStatusResponse(
-        task_id=task_id,
-        status=task["status"],
-        progress=task["progress"],
-        logs=task_logs.get(task_id, []),
-        events=task_events.get(task_id, []),
-        agents=list(task["agents"].values()),
-        result=task.get("result"),
-        error=task.get("error"),
-    )
-
-@app.get("/api/task/{task_id}/events")
-async def stream_events(task_id: str):
-    if task_id not in task_events:
-        raise HTTPException(status_code=404, detail="Task not found")
+    queue = asyncio.Queue()
+    subscribers.setdefault(task_id, []).append(queue)
 
     async def event_generator():
-        last_index = 0
-        while True:
-            events = task_events.get(task_id, [])
-            while last_index < len(events):
-                yield f"data: {json.dumps(events[last_index])}\n\n"
-                last_index += 1
-            await asyncio.sleep(0.5)
+        try:
+            for e in task_events.get(task_id, []):
+                yield f"data: {json.dumps(e)}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            while True:
+                if await request.is_disconnected():
+                    break
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            subscribers[task_id].remove(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+@app.get("/api/task/{task_id}")
+async def task_snapshot(task_id: str):
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    return {
+        "task_id": task_id,
+        "status": tasks[task_id]["status"],
+        "events": task_events.get(task_id, []),
+    }
 
 if __name__ == "__main__":
     import uvicorn

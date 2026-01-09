@@ -28,15 +28,27 @@ def run_software_crew(requirements: str):
 
     task_gen = tasks_manager.generate_code_task(code_generator)
     task_review = tasks_manager.review_code_task(code_reviewer, task_gen)
-    task_decision = tasks_manager.make_refine_decision_task(decision_maker, task_gen)
+    task_decision = tasks_manager.decision_task(decision_maker, task_gen)
     task_refine = tasks_manager.refine_code_task(code_refiner, task_gen, task_review)
     task_doc = tasks_manager.document_code_task(doc_writer, task_refine, task_review)
 
     crew = Crew(
-        agents=[code_generator, code_reviewer, code_refiner, doc_writer, decision_maker],
-        tasks=[task_gen, task_review, task_decision, task_refine, task_doc],
+        agents=[
+            code_generator,
+            code_reviewer,
+            decision_maker,
+            code_refiner,
+            doc_writer,
+        ],
+        tasks=[
+            task_gen,
+            task_review,
+            task_decision,
+            task_refine,
+            task_doc,
+        ],
         process=Process.sequential,
-        verbose=True
+        verbose=True,
     )
 
     print("\n--- RUNNING CREW ---\n", flush=True)

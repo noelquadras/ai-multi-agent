@@ -1,179 +1,169 @@
-'use client';
+"use client";
 
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { useEffect, useRef, useState } from "react";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Terminal, Vote, History, RefreshCw, AlertCircle, CheckCircle, XCircle, Loader2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import {
+  Terminal,
+  EyeOff,
+  Eye,
+  AlertCircle,
+  Wrench,
+  Users,
+} from "lucide-react";
+
+/* =========================
+   TYPES
+========================= */
+
+export type TaskEvent =
+  | { type: "agent_start"; agent: string; timestamp: string }
+  | { type: "agent_end"; agent: string; timestamp: string }
+  | { type: "tool_start"; agent: string; tool: string; timestamp: string }
+  | {
+      type: "tool_error";
+      agent: string;
+      tool: string;
+      error: string;
+      timestamp: string;
+    }
+  | { type: "system_error"; error: string; timestamp: string }
+  | { type: "log"; message: string; timestamp: string };
 
 interface ActivityPanelProps {
-  logs?: string[];
-  taskStatus?: {
-    status: string;
-    progress?: number;
-  };
-  onRefresh?: () => void;
+  events?: TaskEvent[];
 }
 
-export function ActivityPanel({ logs = [], taskStatus, onRefresh }: ActivityPanelProps) {
-  const [activeTab, setActiveTab] = useState<'logs' | 'votes' | 'history'>('logs');
-  const [filteredLogs, setFilteredLogs] = useState<string[]>([]);
+/* =========================
+   COMPONENT
+========================= */
+
+export function ActivityPanel({ events = [] }: ActivityPanelProps) {
+  const [showSystem, setShowSystem] = useState(false);
+  const [activeAgent, setActiveAgent] = useState<string | null>(null);
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  /* =========================
+     AUTO SCROLL (SMART)
+  ========================= */
 
   useEffect(() => {
-    // Filter and categorize logs
-    const formattedLogs = logs.map(log => {
-      // Remove timestamps from log formatting
-      return log.replace(/^\[\d{2}:\d{2}:\d{2}\] /, '');
-    });
-    setFilteredLogs(formattedLogs);
-  }, [logs]);
+    if (!scrollRef.current || !stickToBottomRef.current) return;
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [events, activeAgent, showSystem]);
 
-  const parseAgentFromLog = (log: string) => {
-    if (log.includes('[Manager]') || log.includes('Manager:')) return { name: 'Manager', color: 'text-pink-500' };
-    if (log.includes('[Planner]') || log.includes('Planner:')) return { name: 'Planner', color: 'text-green-500' };
-    if (log.includes('[Coder]') || log.includes('Coder:')) return { name: 'Coder', color: 'text-blue-400' };
-    if (log.includes('[Debugger]') || log.includes('Debugger:')) return { name: 'Debugger', color: 'text-yellow-500' };
-    if (log.includes('[Tester]') || log.includes('Tester:')) return { name: 'Tester', color: 'text-purple-400' };
-    if (log.includes('[Reviewer]') || log.includes('Reviewer:')) return { name: 'Reviewer', color: 'text-orange-500' };
-    if (log.includes('[Refiner]') || log.includes('Refiner:')) return { name: 'Refiner', color: 'text-teal-500' };
-    if (log.includes('[ERROR]') || log.toLowerCase().includes('error')) return { name: 'System', color: 'text-red-500' };
-    return { name: 'System', color: 'text-zinc-500' };
+  const handleScroll = () => {
+    if (!scrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    stickToBottomRef.current =
+      scrollHeight - scrollTop - clientHeight < 40;
   };
 
-  const getStatusIcon = () => {
-    if (!taskStatus) return <Loader2 className="w-3 h-3 animate-spin" />;
-    
-    switch (taskStatus.status) {
-      case 'running':
-        return <Loader2 className="w-3 h-3 animate-spin text-blue-500" />;
-      case 'completed':
-        return <CheckCircle className="w-3 h-3 text-green-500" />;
-      case 'failed':
-        return <XCircle className="w-3 h-3 text-red-500" />;
-      default:
-        return <AlertCircle className="w-3 h-3 text-yellow-500" />;
-    }
-  };
+  /* =========================
+     AGENT LIST
+  ========================= */
 
-  const getStatusText = () => {
-    if (!taskStatus) return 'Loading...';
-    
-    switch (taskStatus.status) {
-      case 'pending':
-        return 'Task pending';
-      case 'running':
-        return `Running (${taskStatus.progress || 0}%)`;
-      case 'completed':
-        return 'Task completed';
-      case 'failed':
-        return 'Task failed';
-      default:
-        return taskStatus.status;
-    }
-  };
+  const agents = Array.from(
+    new Set(
+      events
+        .map((e) => ("agent" in e ? e.agent : null))
+        .filter(Boolean)
+    )
+  ) as string[];
 
-  const getLogEntries = () => {
-    if (activeTab !== 'logs') {
-      return [
-        { timestamp: "14:20:01", agent: "System", color: "text-zinc-500", message: "Voting system will activate after code generation." },
-        { timestamp: "14:20:02", agent: "System", color: "text-zinc-500", message: "No voting history available yet." },
-      ];
+  /* =========================
+     FILTER EVENTS
+  ========================= */
+
+  const visibleEvents = events.filter((e) => {
+    if (!showSystem && e.type === "log") return false;
+
+    if (activeAgent) {
+      return "agent" in e && e.agent === activeAgent;
     }
 
-    if (filteredLogs.length === 0) {
-      return [
-        { timestamp: "--:--:--", agent: "System", color: "text-zinc-500", message: "Waiting for agent logs..." },
-      ];
-    }
+    return true;
+  });
 
-    return filteredLogs.map((log, index) => {
-      const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const agentInfo = parseAgentFromLog(log);
-      const message = log.replace(/\[.*?\]\s*/, '').replace(/^[A-Za-z]+:\s*/, '');
-      
-      return {
-        timestamp,
-        agent: agentInfo.name,
-        color: agentInfo.color,
-        message
-      };
-    }).slice(-20); // Show last 20 logs
-  };
+  /* =========================
+     RENDER
+  ========================= */
 
   return (
     <Card className="h-full border-none rounded-none border-t border-[#1F1F1F] bg-[#050505]">
-      <CardHeader className="py-0 px-0 border-b border-[#1F1F1F] flex flex-row items-center justify-between h-10 bg-[#0A0A0A]">
-        <div className="flex h-full">
-          <button 
-            onClick={() => setActiveTab('logs')}
-            className={`flex items-center gap-2 px-4 h-full text-[11px] font-bold uppercase tracking-wider transition-colors ${
-              activeTab === 'logs' 
-                ? 'text-zinc-100 bg-[#050505] border-t-2 border-purple-500' 
-                : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-          >
-            <Terminal className="w-3 h-3" /> Agent Logs
-            {taskStatus?.status === 'running' && (
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse ml-1" />
-            )}
-          </button>
-          <button 
-            onClick={() => setActiveTab('votes')}
-            className={`flex items-center gap-2 px-4 h-full text-[11px] font-bold uppercase tracking-wider transition-colors ${
-              activeTab === 'votes' 
-                ? 'text-zinc-100 bg-[#050505] border-t-2 border-purple-500' 
-                : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-          >
-            <Vote className="w-3 h-3" /> Voting Results
-          </button>
-          <button 
-            onClick={() => setActiveTab('history')}
-            className={`flex items-center gap-2 px-4 h-full text-[11px] font-bold uppercase tracking-wider transition-colors ${
-              activeTab === 'history' 
-                ? 'text-zinc-100 bg-[#050505] border-t-2 border-purple-500' 
-                : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-          >
-            <History className="w-3 h-3" /> Replacement History
-          </button>
+      {/* HEADER */}
+      <CardHeader className="h-10 px-4 flex flex-row items-center justify-between border-b border-[#1F1F1F] bg-[#0A0A0A]">
+        <div className="flex items-center gap-2 text-zinc-300 text-xs font-bold">
+          <Terminal className="w-3 h-3 text-purple-400" />
+          ACTIVITY
         </div>
-        
-        <div className="flex items-center gap-3 px-4">
-          <div className="flex items-center gap-2">
-            {getStatusIcon()}
-            <span className="text-[11px] text-zinc-400">
-              {getStatusText()}
-            </span>
-          </div>
-          
+
+        <div className="flex items-center gap-2">
           <Button
+            size="icon"
             variant="ghost"
-            size="sm"
-            onClick={onRefresh}
-            className="h-7 w-7 p-0 hover:bg-white/5"
-            title="Refresh Logs"
+            onClick={() => setShowSystem((s) => !s)}
+            className="h-7 w-7"
+            title="Toggle system logs"
           >
-            <RefreshCw className="w-3 h-3 text-zinc-500" />
+            {showSystem ? (
+              <Eye className="w-3 h-3" />
+            ) : (
+              <EyeOff className="w-3 h-3" />
+            )}
           </Button>
-          
-          <Badge variant="outline" className="border-zinc-800 text-zinc-500 text-[10px] px-2 py-0.5">
-            {filteredLogs.length} logs
+
+          <Badge
+            variant="outline"
+            className="border-zinc-800 text-zinc-500 text-[10px]"
+          >
+            {visibleEvents.length} events
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="p-0">
-        <ScrollArea className="h-full px-4 py-3">
-          <div className="space-y-1.5 font-mono text-[11px] leading-relaxed">
-            {getLogEntries().map((log, index) => (
-              <LogEntry
-                key={index}
-                timestamp={log.timestamp}
-                agent={log.agent}
-                color={log.color}
-                message={log.message}
-              />
+
+      {/* AGENT FILTER */}
+      {agents.length > 0 && (
+        <div className="px-4 py-2 border-b border-[#1F1F1F] bg-[#070707] flex items-center gap-2 overflow-x-auto">
+          <Users className="w-3 h-3 text-zinc-500" />
+
+          <AgentFilterButton
+            label="All"
+            active={activeAgent === null}
+            onClick={() => setActiveAgent(null)}
+          />
+
+          {agents.map((agent) => (
+            <AgentFilterButton
+              key={agent}
+              label={agent}
+              active={activeAgent === agent}
+              onClick={() => setActiveAgent(agent)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* CONTENT */}
+      <CardContent className="p-0 h-full">
+        <ScrollArea className="h-full">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="h-full px-4 py-3 overflow-y-auto space-y-1 font-mono text-[11px]"
+          >
+            {visibleEvents.length === 0 && (
+              <div className="text-zinc-500">
+                No activity for selected agent
+              </div>
+            )}
+
+            {visibleEvents.map((e, i) => (
+              <EventRow key={i} event={e} />
             ))}
           </div>
         </ScrollArea>
@@ -182,12 +172,83 @@ export function ActivityPanel({ logs = [], taskStatus, onRefresh }: ActivityPane
   );
 }
 
-function LogEntry({ timestamp, agent, color, message }: { timestamp: string, agent: string, color: string, message: string }) {
+/* =========================
+   SUB COMPONENTS
+========================= */
+
+function AgentFilterButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
-    <div className="flex items-start gap-3 hover:bg-white/5 py-0.5 px-2 rounded -mx-2 transition-colors">
-      <span className="text-zinc-600">[{timestamp}]</span>
-      <span className={`font-bold ${color}`}>{agent}:</span>
-      <span className={color === "text-red-500" ? "text-red-400" : "text-zinc-400"}>{message}</span>
+    <button
+      onClick={onClick}
+      className={`px-2 py-1 text-[10px] rounded border transition-colors whitespace-nowrap ${
+        active
+          ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
+          : "bg-[#0A0A0A] text-zinc-500 border-zinc-800 hover:text-zinc-300"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function EventRow({ event }: { event: TaskEvent }) {
+  const time = new Date(event.timestamp).toLocaleTimeString();
+
+  let color = "text-zinc-400";
+  let label = "System";
+  let message = "";
+  let icon = null;
+
+  switch (event.type) {
+    case "agent_start":
+      color = "text-blue-400";
+      label = event.agent;
+      message = "started working";
+      break;
+
+    case "agent_end":
+      color = "text-green-400";
+      label = event.agent;
+      message = "completed task";
+      break;
+
+    case "tool_start":
+      color = "text-purple-400";
+      icon = <Wrench className="w-3 h-3" />;
+      message = `Using tool: ${event.tool}`;
+      break;
+
+    case "tool_error":
+      color = "text-red-400";
+      label = event.agent;
+      message = `${event.tool}: ${event.error}`;
+      break;
+
+    case "system_error":
+      color = "text-red-500";
+      icon = <AlertCircle className="w-3 h-3" />;
+      message = event.error;
+      break;
+
+    case "log":
+      message = event.message;
+      break;
+  }
+
+  return (
+    <div className="flex items-start gap-2 py-0.5">
+      <span className="text-zinc-600">[{time}]</span>
+      <span className={`font-bold ${color}`}>{label}</span>
+      {icon}
+      <span className={color}>{message}</span>
     </div>
   );
 }
