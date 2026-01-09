@@ -39,6 +39,7 @@ export default function WorkspacePage() {
   const [taskStatus, setTaskStatus] =
     useState<TaskSnapshot["status"]>("pending");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
+  const [finalCode, setFinalCode] = useState("");
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -147,8 +148,13 @@ export default function WorkspacePage() {
 
     es.onmessage = (e) => {
       const event: TaskEvent = JSON.parse(e.data);
+
       setEvents((prev) => [...prev, event]);
       applyEventToAgents(event);
+
+      if (event.type === "code_output") {
+        setFinalCode(event.code);
+      }
     };
 
     es.onerror = () => {
@@ -215,7 +221,7 @@ export default function WorkspacePage() {
         {/* BODY */}
         <div className="flex flex-1 overflow-hidden">
           <div className="flex-1 overflow-hidden">
-            <CodeWorkspace code={""} isReadOnly />
+            <CodeWorkspace code={finalCode} isReadOnly />
           </div>
 
           <div className="hidden xl:block flex-none border-l border-[#1F1F1F]">

@@ -57,9 +57,8 @@ class QueueLogger:
         if not clean:
             return
 
+        # --- AGENT START ---
         start = re.search(r"\[AGENT_START\s+(\w+)\]", clean)
-        end = re.search(r"\[AGENT_END\s+(\w+)\]", clean)
-
         if start:
             emit_event(self.task_id, {
                 "type": "agent_start",
@@ -67,6 +66,8 @@ class QueueLogger:
             })
             return
 
+        # --- AGENT END ---
+        end = re.search(r"\[AGENT_END\s+(\w+)\]", clean)
         if end:
             emit_event(self.task_id, {
                 "type": "agent_end",
@@ -74,6 +75,20 @@ class QueueLogger:
             })
             return
 
+        # --- FINAL CODE BLOCK ---
+        code_match = re.search(
+            r"```(?:python)?\n([\s\S]*?)```",
+            clean
+        )
+        if code_match:
+            emit_event(self.task_id, {
+                "type": "code_output",
+                "agent": "refiner",
+                "code": code_match.group(1).strip(),
+            })
+            return
+
+        # --- FALLBACK LOG ---
         emit_event(self.task_id, {
             "type": "log",
             "message": clean,
@@ -93,7 +108,7 @@ def run_crew(task_id: str, prompt: str):
 
     try:
         tasks[task_id]["status"] = "running"
-        run_software_crew(prompt)
+        run_software_crew(prompt, task_id)
         tasks[task_id]["status"] = "completed"
     except Exception as e:
         tasks[task_id]["status"] = "failed"

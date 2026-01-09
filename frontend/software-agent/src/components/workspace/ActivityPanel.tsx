@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Wrench,
   Users,
+  FileCode,
 } from "lucide-react";
 
 /* =========================
@@ -30,7 +31,13 @@ export type TaskEvent =
       timestamp: string;
     }
   | { type: "system_error"; error: string; timestamp: string }
-  | { type: "log"; message: string; timestamp: string };
+  | { type: "log"; message: string; timestamp: string }
+  | {
+      type: "code_output";
+      agent: string;
+      code: string;
+      timestamp: string;
+    };
 
 interface ActivityPanelProps {
   events?: TaskEvent[];
@@ -48,7 +55,7 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
   const stickToBottomRef = useRef(true);
 
   /* =========================
-     AUTO SCROLL (SMART)
+     AUTO SCROLL
   ========================= */
 
   useEffect(() => {
@@ -59,8 +66,7 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
   const handleScroll = () => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    stickToBottomRef.current =
-      scrollHeight - scrollTop - clientHeight < 40;
+    stickToBottomRef.current = scrollHeight - scrollTop - clientHeight < 40;
   };
 
   /* =========================
@@ -70,10 +76,10 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
   const agents = Array.from(
     new Set(
       events
-        .map((e) => ("agent" in e ? e.agent : null))
-        .filter(Boolean)
+        .filter((e) => "agent" in e)
+        .map((e) => (e as any).agent)
     )
-  ) as string[];
+  );
 
   /* =========================
      FILTER EVENTS
@@ -108,7 +114,6 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
             variant="ghost"
             onClick={() => setShowSystem((s) => !s)}
             className="h-7 w-7"
-            title="Toggle system logs"
           >
             {showSystem ? (
               <Eye className="w-3 h-3" />
@@ -222,6 +227,7 @@ function EventRow({ event }: { event: TaskEvent }) {
 
     case "tool_start":
       color = "text-purple-400";
+      label = event.agent;
       icon = <Wrench className="w-3 h-3" />;
       message = `Using tool: ${event.tool}`;
       break;
@@ -236,6 +242,13 @@ function EventRow({ event }: { event: TaskEvent }) {
       color = "text-red-500";
       icon = <AlertCircle className="w-3 h-3" />;
       message = event.error;
+      break;
+
+    case "code_output":
+      color = "text-emerald-400";
+      label = event.agent;
+      icon = <FileCode className="w-3 h-3" />;
+      message = "emitted final code output";
       break;
 
     case "log":
