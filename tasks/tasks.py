@@ -11,6 +11,7 @@ class SoftwareTasks:
     def generate_code_task(self, agent):
         return Task(
             description=(
+                "[AGENT_START planner]\n"
                 "You are the Code Generation Agent.\n"
                 "Generate the full and complete code solution for the following requirements:\n"
                 f"{self.requirements}\n\n"
@@ -19,6 +20,7 @@ class SoftwareTasks:
                 "• NO explanations, NO intro text, NO bullet points.\n"
                 "• The code must be syntactically correct and runnable.\n"
                 "• Prefer minimal dependencies unless explicitly required.\n"
+                "[AGENT_END planner]"
             ),
             agent=agent,
             expected_output="A single valid markdown code block containing complete runnable code.",
@@ -31,6 +33,7 @@ class SoftwareTasks:
     def review_code_task(self, agent, code_context):
         return Task(
             description=(
+                "[AGENT_START planner]"
                 "You are the Code Review Agent.\n"
                 "Review the code provided in CONTEXT.\n\n"
                 "You MUST output in exactly this strict structure:\n\n"
@@ -45,6 +48,7 @@ class SoftwareTasks:
                 "DO NOT write code.\n"
                 "DO NOT rewrite the solution.\n"
                 "DO NOT add extra sections."
+                "[AGENT_END reviewer]"
             ),
             agent=agent,
             expected_output="A structured markdown review with EXACT 3 sections.",
@@ -58,11 +62,13 @@ class SoftwareTasks:
     def make_refine_decision_task(self, agent, code_context):
         return Task(
             description=(
+                "[AGENT_START decision_maker]\n"
                 "Analyze ONLY the code in context and answer:\n"
                 "Does the code have bugs OR security vulnerabilities OR incorrect behaviour?\n\n"
                 "STRICT OUTPUT RULE:\n"
                 "Output ONLY ONE WORD: YES or NO.\n"
                 "NO punctuation. NO explanation. ONLY the word."
+                "[AGENT_END decision_maker]\n"
             ),
             agent=agent,
             expected_output="YES or NO",
@@ -76,6 +82,7 @@ class SoftwareTasks:
     def refine_code_task(self, agent, code_context, review_context):
         return Task(
             description=(
+                "[AGENT_START refiner]\n"
                 "You are the Code Refinement Agent.\n\n"
                 "Your job:\n"
                 "1. Read the original code.\n"
@@ -90,6 +97,7 @@ class SoftwareTasks:
                 "Output ONLY a single fenced code block containing the FINAL corrected code.\n"
                 "NO explanations.\n"
                 "NO comments.\n"
+                "[AGENT_END refiner]\n"
             ),
             agent=agent,
             expected_output="Single final corrected code block.",
@@ -103,6 +111,7 @@ class SoftwareTasks:
     def document_code_task(self, agent, code_context, review_context):
         return Task(
             description=(
+                "[AGENT_START doc_writer]\n"
                 "You are the Documentation Agent.\n"
                 "Write PROFESSIONAL documentation for the FINAL CODE in context.\n"
                 "Documentation MUST include:\n"
@@ -115,6 +124,7 @@ class SoftwareTasks:
                 "• Known limitations\n"
                 "• Future improvements\n\n"
                 "Output MUST be clean markdown, no code unless needed."
+                "[AGENT_ENDS doc_writer]\n"
             ),
             agent=agent,
             expected_output="A polished, professional README.md styled documentation.",

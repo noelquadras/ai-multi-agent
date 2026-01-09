@@ -45,12 +45,13 @@ interface AgentStatus {
   id: string;
   name: string;
   role: string;
-  status: "idle" | "working" | "completed" | "error";
-  currentTask?: string;
-  progress?: number;
-  logs?: string[];
+  status: "idle" | "thinking" | "approved" | "error";
+  message?: string;
 }
 
+interface AgentPanelProps {
+  agents?: AgentStatus[];
+}
 
 export default function WorkspacePage() {
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
@@ -61,6 +62,23 @@ export default function WorkspacePage() {
   );
   const [logs, setLogs] = useState<string[]>([]);
   const { taskId, prompt } = useExecution();
+
+  const fetchTaskStatus = async (id: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/task/${id}`);
+      const data: TaskStatus = await response.json();
+      setTaskStatus(data);
+      // Update logs
+      if (data.logs) {
+        setLogs(data.logs);
+      }
+
+      setLoading(false);
+    } catch (error) {
+      console.error("Error fetching task status:", error);
+      setLoading(false);
+    }
+  };
   
   const checkApiHealth = async () => {
     try {
@@ -112,23 +130,6 @@ export default function WorkspacePage() {
     );
   }
 
-  const fetchTaskStatus = async (id: string) => {
-    try {
-      const response = await fetch(`http://localhost:8000/api/task/${id}`);
-      const data: TaskStatus = await response.json();
-      setTaskStatus(data);
-
-      // Update logs
-      if (data.logs) {
-        setLogs(data.logs);
-      }
-
-      setLoading(false);
-    } catch (error) {
-      console.error("Error fetching task status:", error);
-      setLoading(false);
-    }
-  };
 
   const refreshTaskStatus = () => {
     if (taskId) {
