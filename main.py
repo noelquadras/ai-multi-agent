@@ -91,13 +91,39 @@ def run_software_crew(requirements: str, task_id: str):
     # =========================
     emit_event(task_id, {"type": "task_completed"})
 
-    return {
+    results = {
         "generated_code": clean_output(str(task_gen.output)),
         "review_report": str(task_review.output),
         "decision": str(task_decision.output).strip(),
         "refined_code": final_code,
         "documentation": str(task_doc.output),
     }
+    
+    emit_event(task_id, {
+        "type": "code_output",
+        "agent": "refiner",
+        "code": results["refined_code"],
+    })
+
+    emit_event(task_id, {
+        "type": "review_output",
+        "agent": "reviewer",
+        "review": results["review_report"],
+    })
+
+    emit_event(task_id, {
+        "type": "decision_output",
+        "agent": "decision",
+        "decision": results["decision"],
+    })
+
+    emit_event(task_id, {
+        "type": "doc_output",
+        "agent": "doc_writer",
+        "documentation": results["documentation"],
+    })
+
+    return results
 
 
 if __name__ == "__main__":
