@@ -19,14 +19,6 @@ import { useExecution } from "@/app/context/ExecutionContext";
    TYPES
 ========================= */
 
-type TaskEvent =
-  | { type: "agent_start"; agent: string; timestamp: string }
-  | { type: "agent_end"; agent: string; timestamp: string }
-  | { type: "tool_start"; agent: string; tool: string; timestamp: string }
-  | { type: "tool_error"; agent: string; tool: string; error: string; timestamp: string }
-  | { type: "system_error"; error: string; timestamp: string }
-  | { type: "log"; message: string; timestamp: string };
-
 interface CrewResponse {
   task_id: string;
 }
@@ -37,16 +29,15 @@ interface CrewResponse {
 
 export default function HomePage() {
   const router = useRouter();
-  const { setTaskId, setPrompt: setGlobalPrompt } = useExecution();
-
-  const [prompt, setPrompt] = useState("");
-  const [running, setRunning] = useState(false);
-  const [events, setEvents] = useState<TaskEvent[]>([]);
+  const {
+    setPrompt: setGlobalPrompt,
+    startSubscription,
+    isRunning,
+  } = useExecution();
+  const [localPrompt, setLocalPrompt] = useState("");
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(
     "checking"
   );
-
-  const eventSourceRef = useRef<EventSource | null>(null);
 
   /* =========================
      API HEALTH
@@ -63,53 +54,29 @@ export default function HomePage() {
   ========================= */
 
   const startCrew = async () => {
-    if (!prompt.trim()) return;
+    if (!localPrompt.trim()) return;
 
-    setRunning(true);
-    setEvents([]);
+    try {
+      const res = await fetch("http://localhost:8000/api/run-crew", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
 
-    const res = await fetch("http://localhost:8000/api/run-crew", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
-    });
+      if (!res.ok) {
+        alert("Server failed to start task!");
+        return;
+      }
 
-    const data: CrewResponse = await res.json();
-    const taskId = data.task_id;
+      const data: CrewResponse = await res.json();
 
-    setTaskId(taskId);
-    setGlobalPrompt(prompt);
-
-    subscribeToEvents(taskId);
-    router.push("/workspace");
-  };
-
-  /* =========================
-     SSE SUBSCRIPTION
-  ========================= */
-
-  const subscribeToEvents = (taskId: string) => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
+      setGlobalPrompt(localPrompt);
+      startSubscription(data.task_id);
+      router.push("/workspace");
+    } catch (error) {
+      console.log("Network error:", error);
     }
-
-    const es = new EventSource(
-      `http://localhost:8000/api/task/${taskId}/events`
-    );
-
-    es.onmessage = (e) => {
-      const event: TaskEvent = JSON.parse(e.data);
-      setEvents((prev) => [...prev, event]);
-    };
-
-    es.onerror = () => {
-      es.close();
-      setRunning(false);
-    };
-
-    eventSourceRef.current = es;
   };
-
   /* =========================
      UI
   ========================= */
@@ -127,14 +94,10 @@ export default function HomePage() {
       {/* API STATUS */}
       <div className="mb-6">
         {apiStatus === "online" && (
-          <Badge className="bg-green-500/20 text-green-400">
-            API ONLINE
-          </Badge>
+          <Badge className="bg-green-500/20 text-green-400">API ONLINE</Badge>
         )}
         {apiStatus === "offline" && (
-          <Badge className="bg-red-500/20 text-red-400">
-            API OFFLINE
-          </Badge>
+          <Badge className="bg-red-500/20 text-red-400">API OFFLINE</Badge>
         )}
         {apiStatus === "checking" && (
           <Badge className="bg-yellow-500/20 text-yellow-400">
@@ -148,19 +111,19 @@ export default function HomePage() {
       <div className="w-full max-w-3xl bg-[#0A0A0A] border border-[#1F1F1F] rounded-xl p-4">
         <Textarea
           placeholder="Describe the application you want to build..."
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          disabled={running}
-          className="min-h-[140px] bg-transparent border-none text-zinc-300"
+          value={localPrompt}
+          onChange={(e) => setLocalPrompt(e.target.value)}
+          disabled={isRunning}
+          className="min-h-35 bg-transparent border-none text-zinc-300"
         />
 
         <div className="flex justify-end mt-4">
           <Button
-            disabled={!prompt.trim() || apiStatus !== "online" || running}
+            disabled={!localPrompt.trim() || apiStatus !== "online" || isRunning}
             onClick={startCrew}
             className="bg-zinc-100 text-black"
           >
-            {running ? (
+            {isRunning ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Running Crew
@@ -174,37 +137,6 @@ export default function HomePage() {
           </Button>
         </div>
       </div>
-
-      {/* EVENTS PREVIEW */}
-      {events.length > 0 && (
-        <div className="mt-8 w-full max-w-3xl bg-black/40 rounded-lg p-4 text-xs font-mono">
-          <div className="text-zinc-400 mb-2 flex items-center gap-2">
-            <Zap className="w-3 h-3" />
-            Live Events
-            <Button
-              size="icon"
-              variant="ghost"
-              className="ml-auto"
-              onClick={() => setEvents([])}
-            >
-              <RefreshCw className="w-3 h-3" />
-            </Button>
-          </div>
-
-          <div className="max-h-64 overflow-y-auto space-y-1">
-            {events.slice(-20).map((e, i) => (
-              <div key={i} className="text-zinc-300">
-                [{new Date(e.timestamp).toLocaleTimeString()}]{" "}
-                {e.type === "agent_start" && `🟦 ${e.agent} started`}
-                {e.type === "agent_end" && `🟩 ${e.agent} finished`}
-                {e.type === "tool_error" && `❌ ${e.tool}: ${e.error}`}
-                {e.type === "system_error" && `🔥 ${e.error}`}
-                {e.type === "log" && e.message}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </main>
   );
 }
