@@ -20,7 +20,7 @@ os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "true"
 # Configure Ollama/OpenAI local-compatible API
 os.environ["OPENAI_API_KEY"] = "na"
 os.environ["OPENAI_API_BASE"] = "http://localhost:11434/v1"
-os.environ["OPENAI_MODEL_NAME"] = "mistral:7b-instruct"
+os.environ["OPENAI_MODEL_NAME"] = "qwen2.5:1.5b-instruct"
 
 load_dotenv()
 
