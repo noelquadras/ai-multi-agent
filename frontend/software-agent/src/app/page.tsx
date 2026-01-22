@@ -36,7 +36,7 @@ export default function HomePage() {
   } = useExecution();
   const [localPrompt, setLocalPrompt] = useState("");
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(
-    "checking"
+    "checking",
   );
 
   /* =========================
@@ -60,7 +60,7 @@ export default function HomePage() {
       const res = await fetch("http://localhost:8000/api/run-crew", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt: localPrompt }),
       });
 
       if (!res.ok) {
@@ -119,7 +119,9 @@ export default function HomePage() {
 
         <div className="flex justify-end mt-4">
           <Button
-            disabled={!localPrompt.trim() || apiStatus !== "online" || isRunning}
+            disabled={
+              !localPrompt.trim() || apiStatus !== "online" || isRunning
+            }
             onClick={startCrew}
             className="bg-zinc-100 text-black"
           >
