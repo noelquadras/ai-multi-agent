@@ -18,7 +18,7 @@ ollama_llm = LLM(
 
 # --- Agent Definitions ---
 
-# Agent 1: Code Generator (The Senior Developer)
+# Agent 1: Code Generator (The Senior Developer) 
 code_generator = Agent(
     role='Senior Software Developer',
     goal='Write high-quality, clean, modular, and efficient code based on user requirements.',
@@ -68,7 +68,7 @@ code_refiner = Agent(
         "You should run the code, check the output, and if there is an error, fix it and run it again until it works."
     ),
     verbose=True,
-    allow_code_execution=True,
+    # allow_code_execution=True,
     llm=ollama_llm,
     max_iter=5, # Give them more iterations to try/fix/try/fix
     tools=[python_executor] # <-- GIVE THE AGENT THE TOOL

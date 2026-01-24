@@ -2,7 +2,7 @@
 from crewai import Task
 
 class SoftwareTasks:
-    def __init__(self, requirements):
+    def __init__(self, requirements: str):
         self.requirements = requirements
 
     # ===========================
@@ -11,18 +11,20 @@ class SoftwareTasks:
     def generate_code_task(self, agent):
         return Task(
             description=(
+                "[AGENT_START coder]\n"
                 "You are the Code Generation Agent.\n"
-                "Generate the full and complete code solution for the following requirements:\n"
+                "Generate the full and complete code solution for the following requirements:\n\n"
                 f"{self.requirements}\n\n"
                 "STRICT RULES:\n"
                 "• Output MUST be ONLY a single fenced code block.\n"
                 "• NO explanations, NO intro text, NO bullet points.\n"
                 "• The code must be syntactically correct and runnable.\n"
                 "• Prefer minimal dependencies unless explicitly required.\n"
+                "[AGENT_END coder]"
             ),
             agent=agent,
-            expected_output="A single valid markdown code block containing complete runnable code.",
-            async_execution=False
+            expected_output="A single valid fenced code block.",
+            async_execution=False,
         )
 
     # ===========================
@@ -31,6 +33,7 @@ class SoftwareTasks:
     def review_code_task(self, agent, code_context):
         return Task(
             description=(
+                "[AGENT_START reviewer]\n"
                 "You are the Code Review Agent.\n"
                 "Review the code provided in CONTEXT.\n\n"
                 "You MUST output in exactly this strict structure:\n\n"
@@ -44,30 +47,34 @@ class SoftwareTasks:
                 "- Bullet list of improvements the next agent must apply.\n\n"
                 "DO NOT write code.\n"
                 "DO NOT rewrite the solution.\n"
-                "DO NOT add extra sections."
+                "DO NOT add extra sections.\n"
+                "[AGENT_END reviewer]"
             ),
             agent=agent,
-            expected_output="A structured markdown review with EXACT 3 sections.",
             context=[code_context],
-            async_execution=False
+            expected_output="Structured markdown review.",
+            async_execution=False,
         )
 
     # ===========================
-    # 3) DECISION MAKING (YES/NO)
+    # 3) DECISION MAKING
     # ===========================
-    def make_refine_decision_task(self, agent, code_context):
+    def decision_task(self, agent, code_context):
         return Task(
             description=(
-                "Analyze ONLY the code in context and answer:\n"
+                "[AGENT_START decision]\n"
+                "Analyze ONLY the code in context.\n\n"
+                "Question:\n"
                 "Does the code have bugs OR security vulnerabilities OR incorrect behaviour?\n\n"
                 "STRICT OUTPUT RULE:\n"
                 "Output ONLY ONE WORD: YES or NO.\n"
-                "NO punctuation. NO explanation. ONLY the word."
+                "NO punctuation. NO explanation.\n"
+                "[AGENT_END decision]"
             ),
             agent=agent,
-            expected_output="YES or NO",
             context=[code_context],
-            async_execution=False
+            expected_output="YES or NO",
+            async_execution=False,
         )
 
     # ===========================
@@ -76,12 +83,13 @@ class SoftwareTasks:
     def refine_code_task(self, agent, code_context, review_context):
         return Task(
             description=(
+                "[AGENT_START refiner]\n"
                 "You are the Code Refinement Agent.\n\n"
-                "Your job:\n"
+                "Steps:\n"
                 "1. Read the original code.\n"
                 "2. Read the review feedback.\n"
                 "3. Apply ALL suggested fixes.\n"
-                "4. Execute the code using the 'Execute Python Code' tool.\n"
+                "4. Execute the code using the Python execution tool.\n"
                 "5. If execution fails:\n"
                 "   - Fix the error\n"
                 "   - Re-run\n"
@@ -90,11 +98,12 @@ class SoftwareTasks:
                 "Output ONLY a single fenced code block containing the FINAL corrected code.\n"
                 "NO explanations.\n"
                 "NO comments.\n"
+                "[AGENT_END refiner]"
             ),
             agent=agent,
-            expected_output="Single final corrected code block.",
             context=[code_context, review_context],
-            async_execution=False
+            expected_output="Final corrected code block.",
+            async_execution=False,
         )
 
     # ===========================
@@ -103,8 +112,9 @@ class SoftwareTasks:
     def document_code_task(self, agent, code_context, review_context):
         return Task(
             description=(
+                "[AGENT_START doc_writer]\n"
                 "You are the Documentation Agent.\n"
-                "Write PROFESSIONAL documentation for the FINAL CODE in context.\n"
+                "Write PROFESSIONAL documentation for the FINAL CODE.\n\n"
                 "Documentation MUST include:\n"
                 "• Overview\n"
                 "• Features\n"
@@ -114,10 +124,11 @@ class SoftwareTasks:
                 "• Explanation of implementation\n"
                 "• Known limitations\n"
                 "• Future improvements\n\n"
-                "Output MUST be clean markdown, no code unless needed."
+                "Output MUST be clean markdown.\n"
+                "[AGENT_END doc_writer]"
             ),
             agent=agent,
-            expected_output="A polished, professional README.md styled documentation.",
             context=[code_context, review_context],
-            async_execution=False
+            expected_output="Professional README-style documentation.",
+            async_execution=False,
         )

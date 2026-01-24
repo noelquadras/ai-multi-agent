@@ -3,3 +3,8 @@ crewai
 langchain-ollama  # The new, correct package
 pydantic
 python-dotenv
+fastapi
+uvicorn
+python-multipart
+cors
+litellm
