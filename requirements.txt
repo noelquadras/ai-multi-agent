@@ -1,10 +1,20 @@
 # requirements.txt
-crewai
-langchain-ollama  # The new, correct package
-pydantic
-python-dotenv
+
+# LLM & Orchestration
+langgraph
+langchain
+langchain-community
+langchain-core
+langchain-ollama
+litellm
+
+# API & Server
 fastapi
 uvicorn
 python-multipart
+pydantic
+python-dotenv
+
+# Utilities
 cors
-litellm
+email-validator

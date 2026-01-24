@@ -2,127 +2,155 @@
 import os
 import re
 from dotenv import load_dotenv
-from crewai import Crew, Process
-from tasks.tasks import SoftwareTasks
-from agents.config import (
-    code_generator,
-    code_reviewer,
-    code_refiner,
-    doc_writer,
-    decision_maker,
+from langgraph.graph import StateGraph, END
+from agents.state import AgentState
+from agents.nodes import (
+    code_generator_node,
+    code_reviewer_node,
+    decision_maker_node,
+    code_refiner_node,
+    doc_writer_node,
+    should_refine
 )
-
-from app import emit_event  # adjust import path if needed
-
-# Disable telemetry
-os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "true"
-
-# Configure Ollama/OpenAI local-compatible API
-os.environ["OPENAI_API_KEY"] = "na"
-os.environ["OPENAI_API_BASE"] = "http://localhost:11434/v1"
-os.environ["OPENAI_MODEL_NAME"] = "mistral:7b-instruct"
+from app import emit_event
 
 load_dotenv()
 
+# Configure environment
+os.environ["OPENAI_API_KEY"] = "na"
+os.environ["OPENAI_API_BASE"] = "http://localhost:11434/v1"
+os.environ["OPENAI_MODEL_NAME"] = "mistral:7b-instruct"
+# Let Ollama use GPU for better performance
+
 
 def clean_output(text: str) -> str:
+    """Clean markdown code blocks from text."""
     if not text:
         return ""
     return re.sub(r"```[a-zA-Z]*|```", "", text).strip()
 
 
-def run_software_crew(requirements: str, task_id: str):
-    tasks_manager = SoftwareTasks(requirements)
-
-    task_gen = tasks_manager.generate_code_task(code_generator)
-    task_review = tasks_manager.review_code_task(code_reviewer, task_gen)
-    task_decision = tasks_manager.decision_task(decision_maker, task_gen)
-    task_refine = tasks_manager.refine_code_task(code_refiner, task_gen, task_review)
-    task_doc = tasks_manager.document_code_task(doc_writer, task_refine, task_review)
-
-    crew = Crew(
-        agents=[
-            code_generator,
-            code_reviewer,
-            decision_maker,
-            code_refiner,
-            doc_writer,
-        ],
-        tasks=[
-            task_gen,
-            task_review,
-            task_decision,
-            task_refine,
-            task_doc,
-        ],
-        process=Process.sequential,
-        verbose=True,
-    )
-
-    print("\n--- RUNNING CREW ---\n", flush=True)
-    crew.kickoff()
-    print("\n--- CREW DONE ---\n", flush=True)
-
-    # =========================
-    # EMIT AGENT END EVENTS
-    # =========================
-    emit_event(task_id, {"type": "agent_end", "agent": "coder"})
-    emit_event(task_id, {"type": "agent_end", "agent": "reviewer"})
-    emit_event(task_id, {"type": "agent_end", "agent": "decision"})
-    emit_event(task_id, {"type": "agent_end", "agent": "refiner"})
-    emit_event(task_id, {"type": "agent_end", "agent": "doc_writer"})
-
-    # =========================
-    # FINAL CODE OUTPUT
-    # =========================
-    final_code = clean_output(str(task_refine.output))
-
-    emit_event(
-        task_id,
+def create_agent_graph():
+    """
+    Create the LangGraph state graph for the agent workflow.
+    
+    Graph structure:
+        START → generate → review → decide → [conditional] → document → END
+                                              ↓
+                                           refine → document
+    """
+    # Initialize graph with state schema
+    workflow = StateGraph(AgentState)
+    
+    # Add nodes (each agent is a node)
+    workflow.add_node("generate", code_generator_node)
+    workflow.add_node("review", code_reviewer_node)
+    workflow.add_node("decide", decision_maker_node)
+    workflow.add_node("refine", code_refiner_node)
+    workflow.add_node("document", doc_writer_node)
+    
+    # Define edges (workflow connections)
+    workflow.set_entry_point("generate")
+    
+    # Sequential flow
+    workflow.add_edge("generate", "review")
+    workflow.add_edge("review", "decide")
+    
+    # Conditional edge: refine or skip to documentation
+    workflow.add_conditional_edges(
+        "decide",
+        should_refine,
         {
-            "type": "code_output",
-            "agent": "refiner",
-            "code": final_code,
-        },
+            "refine": "refine",
+            "document": "document"
+        }
     )
+    
+    # Both paths lead to documentation
+    workflow.add_edge("refine", "document")
+    workflow.add_edge("document", END)
+    
+    return workflow.compile()
 
-    # =========================
-    # TASK COMPLETED
-    # =========================
-    emit_event(task_id, {"type": "task_completed"})
 
-    results = {
-        "generated_code": clean_output(str(task_gen.output)),
-        "review_report": str(task_review.output),
-        "decision": str(task_decision.output).strip(),
-        "refined_code": final_code,
-        "documentation": str(task_doc.output),
+def run_software_crew(requirements: str, task_id: str):
+    """
+    Execute the LangGraph agent workflow.
+    
+    Args:
+        requirements: User's code requirements
+        task_id: Unique task identifier
+        
+    Returns:
+        Final state with all agent outputs
+    """
+    # Create the graph
+    graph = create_agent_graph()
+    
+    # Initial state
+    initial_state: AgentState = {
+        "requirements": requirements,
+        "task_id": task_id,
+        "generated_code": "",
+        "review_report": "",
+        "decision": "",
+        "refined_code": "",
+        "documentation": "",
+        "messages": [],
+        "current_agent": "",
+        "error": None,
+        "iteration_count": 0
     }
+    
+    print("\n--- RUNNING LANGGRAPH WORKFLOW ---\n", flush=True)
+    
+    # Execute the graph
+    final_state = graph.invoke(initial_state)
+    
+    print("\n--- WORKFLOW COMPLETE ---\n", flush=True)
+    
+    # =========================
+    # EMIT FINAL RESULTS
+    # =========================
+    
+    # Final code (use refined if available, otherwise generated)
+    final_code = clean_output(final_state.get("refined_code") or final_state["generated_code"])
     
     emit_event(task_id, {
         "type": "code_output",
         "agent": "refiner",
-        "code": results["refined_code"],
+        "code": final_code
     })
-
+    
     emit_event(task_id, {
         "type": "review_output",
         "agent": "reviewer",
-        "review": results["review_report"],
+        "review": final_state["review_report"]
     })
-
+    
     emit_event(task_id, {
         "type": "decision_output",
         "agent": "decision",
-        "decision": results["decision"],
+        "decision": final_state["decision"]
     })
-
+    
     emit_event(task_id, {
         "type": "doc_output",
         "agent": "doc_writer",
-        "documentation": results["documentation"],
+        "documentation": final_state["documentation"]
     })
-
+    
+    emit_event(task_id, {"type": "task_completed"})
+    
+    # Return results in expected format
+    results = {
+        "generated_code": clean_output(final_state["generated_code"]),
+        "review_report": final_state["review_report"],
+        "decision": final_state["decision"],
+        "refined_code": final_code,
+        "documentation": final_state["documentation"]
+    }
+    
     return results
 
 
