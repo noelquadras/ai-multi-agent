@@ -5,12 +5,10 @@ import json
 import sys
 import os
 import textwrap
-from crewai.tools import tool
 
 # Whitelist of safe modules (you can extend carefully)
 SAFE_MODULES = ["math", "random", "statistics"]
 
-@tool("Execute Python Code (Sandboxed)")
 def execute(code: str, timeout_seconds: int = 4):
     """
     Execute `code` inside a sandbox subprocess with:
