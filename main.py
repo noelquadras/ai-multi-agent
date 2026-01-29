@@ -10,7 +10,9 @@ from agents.nodes import (
     decision_maker_node,
     code_refiner_node,
     doc_writer_node,
-    should_refine
+    cli_tester_node,
+    should_refine,
+    set_model_config
 )
 from app import emit_event
 
@@ -20,7 +22,9 @@ load_dotenv()
 os.environ["OPENAI_API_KEY"] = "na"
 os.environ["OPENAI_API_BASE"] = "http://localhost:11434/v1"
 os.environ["OPENAI_MODEL_NAME"] = "mistral:7b-instruct"
-# Let Ollama use GPU for better performance
+
+# Groq API configuration
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 
 def clean_output(text: str) -> str:
@@ -30,14 +34,17 @@ def clean_output(text: str) -> str:
     return re.sub(r"```[a-zA-Z]*|```", "", text).strip()
 
 
-def create_agent_graph():
+def create_agent_graph(include_cli_test: bool = True):
     """
     Create the LangGraph state graph for the agent workflow.
     
     Graph structure:
-        START → generate → review → decide → [conditional] → document → END
+        START → generate → review → decide → [conditional] → test → document → END
                                               ↓
-                                           refine → document
+                                           refine → test → document
+    
+    Args:
+        include_cli_test: Whether to include CLI testing node (patent feature)
     """
     # Initialize graph with state schema
     workflow = StateGraph(AgentState)
@@ -49,6 +56,9 @@ def create_agent_graph():
     workflow.add_node("refine", code_refiner_node)
     workflow.add_node("document", doc_writer_node)
     
+    if include_cli_test:
+        workflow.add_node("test", cli_tester_node)
+    
     # Define edges (workflow connections)
     workflow.set_entry_point("generate")
     
@@ -57,52 +67,69 @@ def create_agent_graph():
     workflow.add_edge("review", "decide")
     
     # Conditional edge: refine or skip to documentation
-    workflow.add_conditional_edges(
-        "decide",
-        should_refine,
-        {
-            "refine": "refine",
-            "document": "document"
-        }
-    )
+    if include_cli_test:
+        workflow.add_conditional_edges(
+            "decide",
+            should_refine,
+            {
+                "refine": "refine",
+                "document": "test"  # Skip refine, go to test
+            }
+        )
+        workflow.add_edge("refine", "test")
+        workflow.add_edge("test", "document")
+    else:
+        workflow.add_conditional_edges(
+            "decide",
+            should_refine,
+            {
+                "refine": "refine",
+                "document": "document"
+            }
+        )
+        workflow.add_edge("refine", "document")
     
-    # Both paths lead to documentation
-    workflow.add_edge("refine", "document")
     workflow.add_edge("document", END)
     
     return workflow.compile()
 
 
-def run_software_crew(requirements: str, task_id: str):
+def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
     """
     Execute the LangGraph agent workflow.
     
     Args:
         requirements: User's code requirements
         task_id: Unique task identifier
+        model: LLM model to use ("ollama" or "groq")
         
     Returns:
         Final state with all agent outputs
     """
-    # Create the graph
-    graph = create_agent_graph()
+    # Configure model for this run
+    set_model_config(model, GROQ_API_KEY)
+    
+    # Create the graph with CLI testing enabled
+    graph = create_agent_graph(include_cli_test=True)
     
     # Initial state
     initial_state: AgentState = {
         "requirements": requirements,
         "task_id": task_id,
+        "model": model,
         "generated_code": "",
         "review_report": "",
         "decision": "",
         "refined_code": "",
         "documentation": "",
+        "test_results": "",
         "messages": [],
         "current_agent": "",
         "error": None,
         "iteration_count": 0
     }
     
-    print("\n--- RUNNING LANGGRAPH WORKFLOW ---\n", flush=True)
+    print(f"\n--- RUNNING LANGGRAPH WORKFLOW (Model: {model}) ---\n", flush=True)
     
     # Execute the graph
     final_state = graph.invoke(initial_state)
@@ -140,6 +167,14 @@ def run_software_crew(requirements: str, task_id: str):
         "documentation": final_state["documentation"]
     })
     
+    # Emit test results if available
+    if final_state.get("test_results"):
+        emit_event(task_id, {
+            "type": "test_output",
+            "agent": "tester",
+            "results": final_state["test_results"]
+        })
+    
     emit_event(task_id, {"type": "task_completed"})
     
     # Return results in expected format
@@ -148,13 +183,16 @@ def run_software_crew(requirements: str, task_id: str):
         "review_report": final_state["review_report"],
         "decision": final_state["decision"],
         "refined_code": final_code,
-        "documentation": final_state["documentation"]
+        "documentation": final_state["documentation"],
+        "test_results": final_state.get("test_results", ""),
+        "model_used": model
     }
     
     return results
 
 
 if __name__ == "__main__":
+    model = input("Model (ollama/groq) [ollama]: ").strip() or "ollama"
     req = input("Enter requirements: ")
-    result = run_software_crew(req, task_id="debug")
+    result = run_software_crew(req, task_id="debug", model=model)
     print(result)

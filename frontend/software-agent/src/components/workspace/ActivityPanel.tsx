@@ -13,6 +13,12 @@ import {
   Wrench,
   Users,
   FileCode,
+  CheckCircle,
+  XCircle,
+  Pause,
+  Play,
+  TestTube,
+  FileText,
 } from "lucide-react";
 
 /* =========================
@@ -23,21 +29,19 @@ export type TaskEvent =
   | { type: "agent_start"; agent: string; timestamp: string }
   | { type: "agent_end"; agent: string; timestamp: string }
   | { type: "tool_start"; agent: string; tool: string; timestamp: string }
-  | {
-      type: "tool_error";
-      agent: string;
-      tool: string;
-      error: string;
-      timestamp: string;
-    }
+  | { type: "tool_error"; agent: string; tool: string; error: string; timestamp: string }
   | { type: "system_error"; error: string; timestamp: string }
   | { type: "log"; message: string; timestamp: string }
-  | {
-      type: "code_output";
-      agent: string;
-      code: string;
-      timestamp: string;
-    };
+  | { type: "code_output"; agent: string; code: string; timestamp: string }
+  | { type: "review_output"; agent: string; review: string; timestamp: string }
+  | { type: "decision_output"; agent: string; decision: string; timestamp: string }
+  | { type: "doc_output"; agent: string; documentation: string; timestamp: string }
+  | { type: "test_output"; agent: string; results: string; timestamp: string }
+  | { type: "cli_output"; message: string; timestamp: string }
+  | { type: "task_completed"; timestamp: string }
+  | { type: "task_paused"; message: string; timestamp: string }
+  | { type: "task_resumed"; message: string; timestamp: string }
+  | { type: "human_approval"; approved: boolean; message: string; timestamp: string };
 
 interface ActivityPanelProps {
   events?: TaskEvent[];
@@ -249,6 +253,69 @@ function EventRow({ event }: { event: TaskEvent }) {
       label = event.agent;
       icon = <FileCode className="w-3 h-3" />;
       message = "emitted final code output";
+      break;
+
+    case "review_output":
+      color = "text-yellow-400";
+      label = event.agent;
+      icon = <FileText className="w-3 h-3" />;
+      message = "completed code review";
+      break;
+
+    case "decision_output":
+      color = "text-purple-400";
+      label = event.agent;
+      message = `decision: ${event.decision}`;
+      break;
+
+    case "doc_output":
+      color = "text-blue-400";
+      label = event.agent;
+      icon = <FileText className="w-3 h-3" />;
+      message = "generated documentation";
+      break;
+
+    case "test_output":
+      color = "text-cyan-400";
+      label = event.agent;
+      icon = <TestTube className="w-3 h-3" />;
+      message = "completed CLI tests";
+      break;
+
+    case "cli_output":
+      color = "text-green-400";
+      label = "CLI";
+      icon = <Terminal className="w-3 h-3" />;
+      message = event.message;
+      break;
+
+    case "task_completed":
+      color = "text-green-500";
+      icon = <CheckCircle className="w-3 h-3" />;
+      message = "Task completed successfully!";
+      break;
+
+    case "task_paused":
+      color = "text-yellow-500";
+      icon = <Pause className="w-3 h-3" />;
+      message = event.message;
+      break;
+
+    case "task_resumed":
+      color = "text-green-500";
+      icon = <Play className="w-3 h-3" />;
+      message = event.message;
+      break;
+
+    case "human_approval":
+      color = event.approved ? "text-green-500" : "text-red-500";
+      icon = event.approved ? (
+        <CheckCircle className="w-3 h-3" />
+      ) : (
+        <XCircle className="w-3 h-3" />
+      );
+      label = "Human";
+      message = event.message;
       break;
 
     case "log":

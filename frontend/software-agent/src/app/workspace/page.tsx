@@ -5,10 +5,20 @@ import { AgentPanel } from "@/components/workspace/AgentPanel";
 import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
 import { PreviewPanel } from "@/components/workspace/PreviewPanel";
+import { CLIPanel } from "@/components/workspace/CLIPanel";
 import { useExecution } from "@/app/context/ExecutionContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { RefreshCw } from "lucide-react";
+import { 
+  RefreshCw, 
+  Pause, 
+  Play, 
+  Check, 
+  X, 
+  Terminal,
+  Eye,
+  FileText 
+} from "lucide-react";
 
 /* =========================
    TYPES
@@ -24,9 +34,20 @@ interface AgentStatus {
 
 interface TaskSnapshot {
   task_id: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "paused";
+  model?: string;
   events: TaskEvent[];
 }
+
+interface TaskOutputs {
+  code: string;
+  review: string;
+  decision: string;
+  documentation: string;
+  testResults: string;
+}
+
+type SidePanel = "preview" | "cli" | "docs";
 
 /* =========================
    COMPONENT
@@ -36,10 +57,18 @@ export default function WorkspacePage() {
   const { taskId } = useExecution();
 
   const [events, setEvents] = useState<TaskEvent[]>([]);
-  const [taskStatus, setTaskStatus] =
-    useState<TaskSnapshot["status"]>("pending");
+  const [taskStatus, setTaskStatus] = useState<TaskSnapshot["status"]>("pending");
+  const [taskModel, setTaskModel] = useState<string>("ollama");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
-  const [finalCode, setFinalCode] = useState("");
+  const [outputs, setOutputs] = useState<TaskOutputs>({
+    code: "",
+    review: "",
+    decision: "",
+    documentation: "",
+    testResults: "",
+  });
+  const [cliLogs, setCliLogs] = useState<string[]>([]);
+  const [sidePanel, setSidePanel] = useState<SidePanel>("preview");
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -76,6 +105,13 @@ export default function WorkspacePage() {
       status: "idle",
       progress: 0,
     },
+    tester: {
+      id: "tester",
+      name: "Tester",
+      role: "CLI Testing",
+      status: "idle",
+      progress: 0,
+    },
     doc_writer: {
       id: "doc_writer",
       name: "Doc Writer",
@@ -86,50 +122,71 @@ export default function WorkspacePage() {
   };
 
   /* =========================
-     EVENT → AGENT STATE
+     EVENT → STATE UPDATES
   ========================= */
 
-  const applyEventToAgents = (event: TaskEvent) => {
+  const applyEvent = (event: TaskEvent) => {
+    // Update agent status
     setAgents((prev) => {
       const map = new Map(prev.map((a) => [a.id, { ...a }]));
 
-      if (
-        event.type !== "agent_start" &&
-        event.type !== "agent_end" &&
-        event.type !== "tool_error"
-      ) {
-        return Array.from(map.values());
-      }
-
-      const agent = map.get(event.agent);
-      if (!agent) return Array.from(map.values());
-
-      if (!agent) return Array.from(map.values());
-
-      switch (event.type) {
-        case "agent_start":
-          agent.status = "thinking";
-          agent.progress = Math.max(agent.progress, 5);
-          break;
-
-        case "agent_end":
-          agent.status = "approved";
-          agent.progress = 100;
-          break;
-
-        case "tool_error":
-          agent.status = "error";
-          break;
-
-        default:
-          if (agent.status === "thinking" && agent.progress < 90) {
-            agent.progress += 10;
+      if (event.type === "agent_start" || event.type === "agent_end") {
+        const agent = map.get(event.agent);
+        if (agent) {
+          if (event.type === "agent_start") {
+            agent.status = "thinking";
+            agent.progress = Math.max(agent.progress, 5);
+          } else {
+            agent.status = "approved";
+            agent.progress = 100;
           }
+          map.set(agent.id, agent);
+        }
       }
 
-      map.set(agent.id, agent);
+      if (event.type === "tool_error" && event.agent) {
+        const agent = map.get(event.agent);
+        if (agent) {
+          agent.status = "error";
+          map.set(agent.id, agent);
+        }
+      }
+
       return Array.from(map.values());
     });
+
+    // Update outputs based on event type
+    if (event.type === "code_output" && event.code) {
+      setOutputs((prev) => ({ ...prev, code: event.code }));
+    }
+    if (event.type === "review_output" && event.review) {
+      setOutputs((prev) => ({ ...prev, review: event.review }));
+    }
+    if (event.type === "decision_output" && event.decision) {
+      setOutputs((prev) => ({ ...prev, decision: event.decision }));
+    }
+    if (event.type === "doc_output" && event.documentation) {
+      setOutputs((prev) => ({ ...prev, documentation: event.documentation }));
+    }
+    if (event.type === "test_output" && event.results) {
+      setOutputs((prev) => ({ ...prev, testResults: event.results }));
+    }
+
+    // CLI logs
+    if (event.type === "cli_output" && event.message) {
+      setCliLogs((prev) => [...prev, event.message]);
+    }
+
+    // Task status updates
+    if (event.type === "task_completed") {
+      setTaskStatus("completed");
+    }
+    if (event.type === "task_paused") {
+      setTaskStatus("paused");
+    }
+    if (event.type === "task_resumed") {
+      setTaskStatus("running");
+    }
   };
 
   /* =========================
@@ -141,6 +198,15 @@ export default function WorkspacePage() {
 
     setAgents(Object.values(AGENT_REGISTRY));
     setEvents([]);
+    setOutputs({
+      code: "",
+      review: "",
+      decision: "",
+      documentation: "",
+      testResults: "",
+    });
+    setCliLogs([]);
+    setTaskStatus("running");
 
     const es = new EventSource(
       `http://localhost:8000/api/task/${taskId}/events`
@@ -148,13 +214,8 @@ export default function WorkspacePage() {
 
     es.onmessage = (e) => {
       const event: TaskEvent = JSON.parse(e.data);
-
       setEvents((prev) => [...prev, event]);
-      applyEventToAgents(event);
-
-      if (event.type === "code_output") {
-        setFinalCode(event.code);
-      }
+      applyEvent(event);
     };
 
     es.onerror = () => {
@@ -174,12 +235,47 @@ export default function WorkspacePage() {
     const res = await fetch(`http://localhost:8000/api/task/${taskId}`);
     const data: TaskSnapshot = await res.json();
     setTaskStatus(data.status);
+    setTaskModel(data.model || "ollama");
   };
 
   useEffect(() => {
     if (!taskId) return;
     refreshStatus();
   }, [taskId]);
+
+  /* =========================
+     HUMAN-IN-THE-LOOP ACTIONS
+  ========================= */
+
+  const handlePause = async () => {
+    if (!taskId) return;
+    await fetch(`http://localhost:8000/api/task/${taskId}/pause`, {
+      method: "POST",
+    });
+    setTaskStatus("paused");
+  };
+
+  const handleResume = async () => {
+    if (!taskId) return;
+    await fetch(`http://localhost:8000/api/task/${taskId}/resume`, {
+      method: "POST",
+    });
+    setTaskStatus("running");
+  };
+
+  const handleApprove = async () => {
+    if (!taskId) return;
+    await fetch(`http://localhost:8000/api/task/${taskId}/approve`, {
+      method: "POST",
+    });
+  };
+
+  const handleReject = async () => {
+    if (!taskId) return;
+    await fetch(`http://localhost:8000/api/task/${taskId}/reject`, {
+      method: "POST",
+    });
+  };
 
   /* =========================
      UI
@@ -193,6 +289,21 @@ export default function WorkspacePage() {
     );
   }
 
+  const getStatusColor = () => {
+    switch (taskStatus) {
+      case "running":
+        return "bg-blue-500/20 text-blue-400";
+      case "completed":
+        return "bg-green-500/20 text-green-400";
+      case "paused":
+        return "bg-yellow-500/20 text-yellow-400";
+      case "failed":
+        return "bg-red-500/20 text-red-400";
+      default:
+        return "bg-purple-500/20 text-purple-400";
+    }
+  };
+
   return (
     <div className="flex h-screen bg-[#050505] overflow-hidden">
       {/* AGENTS */}
@@ -203,29 +314,163 @@ export default function WorkspacePage() {
       {/* MAIN */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* HEADER */}
-        <div className="h-12 flex items-center justify-between px-4 border-b border-[#1F1F1F] bg-[#0A0A0A]">
-          <Badge className="bg-purple-500/20 text-purple-400">
-            {taskStatus.toUpperCase()}
-          </Badge>
+        <div className="h-14 flex items-center justify-between px-4 border-b border-[#1F1F1F] bg-[#0A0A0A]">
+          <div className="flex items-center gap-3">
+            <Badge className={getStatusColor()}>
+              {taskStatus.toUpperCase()}
+            </Badge>
+            <Badge variant="outline" className="border-zinc-700 text-zinc-400 text-xs">
+              {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
+            </Badge>
+          </div>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={refreshStatus}
-            className="text-zinc-400"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </Button>
+          {/* Human-in-the-loop controls */}
+          <div className="flex items-center gap-2">
+            {taskStatus === "running" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handlePause}
+                className="text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10"
+              >
+                <Pause className="w-4 h-4 mr-1" />
+                Pause
+              </Button>
+            )}
+            {taskStatus === "paused" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleResume}
+                className="text-green-400 hover:text-green-300 hover:bg-green-500/10"
+              >
+                <Play className="w-4 h-4 mr-1" />
+                Resume
+              </Button>
+            )}
+            
+            <div className="w-px h-6 bg-zinc-700 mx-2" />
+            
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleApprove}
+              disabled={!outputs.code}
+              className="text-green-400 hover:text-green-300 hover:bg-green-500/10 disabled:opacity-50"
+            >
+              <Check className="w-4 h-4 mr-1" />
+              Approve
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleReject}
+              disabled={!outputs.code}
+              className="text-red-400 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+            >
+              <X className="w-4 h-4 mr-1" />
+              Reject
+            </Button>
+
+            <div className="w-px h-6 bg-zinc-700 mx-2" />
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={refreshStatus}
+              className="text-zinc-400"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
 
         {/* BODY */}
         <div className="flex flex-1 overflow-hidden">
+          {/* Code Editor */}
           <div className="flex-1 overflow-hidden">
-            <CodeWorkspace code={finalCode} isReadOnly />
+            <CodeWorkspace code={outputs.code} isReadOnly />
           </div>
 
-          <div className="hidden xl:block flex-none border-l border-[#1F1F1F]">
-            <PreviewPanel taskStatus={{ status: taskStatus }} />
+          {/* Side Panel Selector + Content */}
+          <div className="hidden xl:flex flex-col border-l border-[#1F1F1F]">
+            {/* Panel Tabs */}
+            <div className="flex border-b border-[#1F1F1F] bg-[#0A0A0A]">
+              <button
+                onClick={() => setSidePanel("preview")}
+                className={`flex items-center gap-2 px-4 py-2 text-sm ${
+                  sidePanel === "preview"
+                    ? "bg-[#141414] text-white border-b-2 border-purple-500"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                <Eye className="w-4 h-4" />
+                Preview
+              </button>
+              <button
+                onClick={() => setSidePanel("cli")}
+                className={`flex items-center gap-2 px-4 py-2 text-sm ${
+                  sidePanel === "cli"
+                    ? "bg-[#141414] text-white border-b-2 border-green-500"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                <Terminal className="w-4 h-4" />
+                CLI Tests
+                {cliLogs.length > 0 && (
+                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                )}
+              </button>
+              <button
+                onClick={() => setSidePanel("docs")}
+                className={`flex items-center gap-2 px-4 py-2 text-sm ${
+                  sidePanel === "docs"
+                    ? "bg-[#141414] text-white border-b-2 border-blue-500"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                Docs
+              </button>
+            </div>
+
+            {/* Panel Content */}
+            <div className="flex-1 overflow-hidden">
+              {sidePanel === "preview" && (
+                <PreviewPanel 
+                  taskStatus={{ 
+                    status: taskStatus, 
+                    result: {
+                      refined_code: outputs.code,
+                      generated_code: outputs.code,
+                      documentation: outputs.documentation,
+                      review_report: outputs.review,
+                    }
+                  }} 
+                />
+              )}
+              {sidePanel === "cli" && (
+                <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
+              )}
+              {sidePanel === "docs" && (
+                <div className="w-[400px] h-full bg-[#0A0A0A] p-4 overflow-auto">
+                  <h3 className="text-sm font-semibold text-zinc-300 mb-4">
+                    Generated Documentation
+                  </h3>
+                  {outputs.documentation ? (
+                    <div className="prose prose-invert prose-sm max-w-none">
+                      <pre className="whitespace-pre-wrap text-xs text-zinc-400 font-mono">
+                        {outputs.documentation}
+                      </pre>
+                    </div>
+                  ) : (
+                    <p className="text-zinc-500 text-sm">
+                      Documentation will appear here once generated.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
