@@ -23,6 +23,7 @@
 │   • Shows agent status, code editor, activity log           │
 │   • Runs on http://localhost:3000                           │
 │   • Uses Monaco Editor (same as VS Code!)                   │
+│   • Integrated with Convex for real-time database           │
 └──────────────────────┬──────────────────────────────────────┘
                        ↓ HTTP/SSE (Real-time events)
 ┌─────────────────────────────────────────────────────────────┐
@@ -32,6 +33,7 @@
 │   • Handles API requests                                    │
 │   • Streams events to frontend via SSE                      │
 │   • Runs on http://localhost:8000                           │
+│   • Integrates with Convex cloud backend                    │
 └──────────────────────┬──────────────────────────────────────┘
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -48,6 +50,14 @@
 │   • Local: Ollama with Mistral 7B (FREE, PRIVATE)          │
 │   • Cloud: Groq with Llama 3.3 70B (FASTER)                │
 │   • The "brain" that actually generates text/code          │
+└─────────────────────────────────────────────────────────────┘
+                       ↓
+┌─────────────────────────────────────────────────────────────┐
+│              ☁️ CONVEX (Cloud Backend)                      │
+│                                                              │
+│   • Real-time database for users, projects, tasks           │
+│   • Serverless functions (mutations/queries)                │
+│   • Auto-scaling and managed infrastructure                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -258,26 +268,156 @@ We migrated to **LangGraph** - a more powerful framework from LangChain.
 
 ---
 
+## ☁️ Convex Backend Integration (NEW!)
+
+### What is Convex?
+**Convex** is a **serverless backend platform** that provides:
+- Real-time database
+- Serverless functions (queries/mutations)
+- Automatic scaling
+- TypeScript-first schema
+
+### Why We Use Convex
+- 🔄 **Real-time sync** - Data updates instantly across all clients
+- 📊 **Persistent storage** - Save projects, tasks, and history
+- 👤 **User management** - Credits, subscriptions, preferences
+- 🔐 **Secure** - Built-in authentication and authorization
+
+### Convex Schema (Database Tables)
+
+| Table | Purpose |
+|-------|---------|
+| `users` | User accounts, credits, subscriptions |
+| `projects` | User's code projects |
+| `tasks` | Individual agent run records |
+| `events` | Real-time agent activity logs |
+| `files` | Generated/uploaded files |
+| `memory` | Agent learning context |
+
+### Key Convex Files
+
+```
+frontend/software-agent/convex/
+├── schema.ts        # Database schema definitions
+├── users.ts         # User management functions
+├── projects.ts      # Project CRUD operations
+├── tasks.ts         # Task tracking (pause/resume)
+├── events.ts        # Real-time event storage
+├── files.ts         # File management
+├── memory.ts        # Agent context memory
+└── subscriptions.ts # Real-time subscriptions
+```
+
+### How Backend Connects to Convex
+
+```python
+# In app.py
+CONVEX_URL = os.getenv("CONVEX_SITE_URL", "")
+CONVEX_DEPLOY_KEY = os.getenv("CONVEX_DEPLOY_KEY", "")
+
+async def convex_mutation(function_name: str, args: Dict[str, Any]):
+    """Call a Convex mutation function."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{CONVEX_URL}/api/mutation",
+            json={"path": function_name, "args": args},
+            headers={"Authorization": f"Bearer {CONVEX_DEPLOY_KEY}"}
+        )
+        return response.json()
+```
+
+### Convex Features Used
+1. **Task Checkpointing** - Pause and resume workflows
+2. **Credit System** - Track user usage
+3. **Event Logging** - Real-time activity tracking
+4. **Project Storage** - Save generated code and docs
+
+---
+
+## 🚀 Groq Cloud LLM Integration (NEW!)
+
+### What is Groq?
+**Groq** is a cloud-based LLM provider that offers:
+- ⚡ **Ultra-fast inference** (faster than OpenAI!)
+- 🆓 **Free tier** available
+- 🧠 **Access to Llama 3.3 70B** (larger model = better quality)
+
+### Why We Added Groq
+| Ollama (Local) | Groq (Cloud) |
+|----------------|--------------|
+| Free forever | Free tier available |
+| Private (no data leaves your PC) | Data goes to cloud |
+| Slower (depends on your GPU) | **Very fast** |
+| Mistral 7B | **Llama 3.3 70B** (10x larger!) |
+| Works offline | Needs internet |
+
+### How to Switch Between Models
+
+```python
+# In main.py
+def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
+    set_model_config(model, GROQ_API_KEY)
+    # ... rest of workflow
+```
+
+### Groq Configuration
+
+```python
+# In agents/nodes.py
+def get_groq_llm():
+    from langchain_groq import ChatGroq
+    return ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=_groq_api_key,
+        temperature=0.7
+    )
+```
+
+### Smart Model Selection
+Heavy tasks (code generation, refining) → Groq (if available)
+Light tasks (review, decision) → Ollama (saves API calls)
+
+```python
+def get_llm(for_heavy_task: bool = False):
+    if _current_model == "groq" and for_heavy_task:
+        return get_groq_llm()
+    return get_ollama_llm()
+```
+
+---
+
 ## 📁 Key Files Explained
 
 ### Backend Files:
 
 | File | Purpose |
 |------|---------|
-| `app.py` | FastAPI server, handles HTTP requests, SSE streaming |
-| `main.py` | Creates LangGraph workflow, orchestrates agents |
+| `app.py` | FastAPI server, handles HTTP requests, SSE streaming, Convex integration |
+| `main.py` | Creates LangGraph workflow, orchestrates agents, model selection |
 | `agents/state.py` | Defines AgentState TypedDict (shared state) |
-| `agents/nodes.py` | All 6 agent functions + conditional edge logic |
+| `agents/nodes.py` | All 6 agent functions + conditional edge logic + Groq/Ollama LLM |
+| `agents/config.py` | Agent configurations (legacy CrewAI format) |
 | `tools/executor.py` | Sandboxed Python code execution |
+| `requirements.txt` | Python dependencies (incl. langchain-groq, httpx) |
 
 ### Frontend Files:
 
 | File | Purpose |
 |------|---------|
-| `page.tsx` | Home page with prompt input |
-| `workspace/page.tsx` | Main workspace with all panels |
-| `components/workspace/AgentPanel.tsx` | Shows 6 agent status cards |
-| `components/workspace/CodeWorkspace.tsx` | Monaco code editor |
+| `src/app/page.tsx` | Home page with prompt input |
+| `src/app/workspace/page.tsx` | Main workspace with all panels |
+| `src/components/workspace/*.tsx` | Agent panels, code editor |
+| `convex/schema.ts` | Convex database schema |
+| `convex/tasks.ts` | Task management functions |
+| `convex/users.ts` | User management functions |
+| `package.json` | Dependencies (Next.js 16, Convex, NextAuth) |
+
+### Environment Files:
+
+| File | Variables |
+|------|-----------|
+| `.env` (backend) | `GROQ_API_KEY`, `CONVEX_SITE_URL` |
+| `.env.local` (frontend) | `NEXT_PUBLIC_CONVEX_URL`, `NEXTAUTH_SECRET` |
 
 ---
 
@@ -290,7 +430,8 @@ We migrated to **LangGraph** - a more powerful framework from LangChain.
 - **LangChain** - LLM application framework
 - **Ollama** - Local LLM runtime (like having ChatGPT on your computer)
 - **Mistral 7B** - The actual AI model (7 billion parameters)
-- **Groq** - Cloud LLM for faster responses (optional)
+- **Groq** - Cloud LLM for faster responses with Llama 3.3 70B
+- **httpx** - Async HTTP client for Convex API calls
 
 ### Frontend:
 - **Next.js 16** - React framework with server components
@@ -299,6 +440,12 @@ We migrated to **LangGraph** - a more powerful framework from LangChain.
 - **TailwindCSS 4** - Utility-first CSS
 - **Monaco Editor** - VS Code's editor component
 - **Radix UI** - Accessible UI components
+- **Convex** - Real-time backend/database
+- **NextAuth** - Authentication (OAuth support)
+
+### Cloud Services:
+- **Convex Cloud** - Serverless backend & real-time database
+- **Groq API** - Fast cloud LLM inference
 
 ---
 
@@ -312,10 +459,26 @@ The code tester runs in a **sandbox** - a safe, isolated environment:
 - ❌ `input()` - No user input
 - ❌ `os.system()` - No system commands
 - ❌ `subprocess` - No process spawning
-- ❌ Network modules - No internet access
+- ❌ Network modules (`socket`, `urllib`, `http`) - No internet access
 - ❌ `shutil` - No file operations
+- ❌ `pickle`, `marshal` - No code deserialization
+- ❌ `ctypes`, `cffi` - No low-level access
 
 **Why?** If the AI generates malicious code, it can't harm your computer!
+
+### Blocked Modules (Full List):
+```python
+BLOCKED_MODULES = [
+    "subprocess", "multiprocessing",  # Process creation
+    "socket", "http", "urllib", "ftplib", "smtplib",  # Network
+    "ssl", "asyncio",  # Network-related
+    "ctypes", "cffi",  # Low-level access
+    "pickle", "shelve", "marshal",  # Deserialization
+    "importlib", "zipimport",  # Dynamic imports
+    "shutil", "tempfile", "glob", "pathlib",  # File system
+    "sqlite3", "webbrowser", "code", "codeop",
+]
+```
 
 ---
 
@@ -342,6 +505,18 @@ Backend                    Frontend
 - Built-in browser support
 - No need for bidirectional messages
 
+### Event Types:
+| Event Type | Purpose |
+|------------|---------|
+| `agent_start` | Agent began working |
+| `agent_end` | Agent finished |
+| `log` | Progress message |
+| `code_output` | Generated code |
+| `cli_output` | Test execution result |
+| `task_completed` | Workflow finished |
+| `task_paused/resumed` | Human-in-the-loop |
+| `system_error` | Error occurred |
+
 ---
 
 ## 💡 Key Concepts to Remember
@@ -366,10 +541,17 @@ Backend                    Frontend
 - Ollama runs Mistral 7B locally
 - Alternative to ChatGPT API
 
-### 5. Hybrid LLM
+### 5. Hybrid LLM (NEW!)
 - Can switch between local (Ollama) and cloud (Groq)
 - Local = Free, Private, Slower
 - Cloud = Fast, Free tier, Better quality
+- Smart routing: heavy tasks → Groq, light tasks → Ollama
+
+### 6. Convex Backend (NEW!)
+- Serverless real-time database
+- Manages users, projects, tasks, files
+- Checkpointing for pause/resume
+- Credit system for usage tracking
 
 ---
 
@@ -419,6 +601,37 @@ Backend                    Frontend
 > - `test_results` - From Tester
 > - `documentation` - From Doc Writer
 
+### Q11: What is Convex and why did you use it? (NEW!)
+> Convex is a **serverless backend platform** with a real-time database. We use it for:
+> - Storing user data, projects, and task history
+> - Real-time sync between frontend and database
+> - Checkpoint storage for pause/resume functionality
+> - Credit system for usage tracking
+
+### Q12: What is Groq and how does it improve performance? (NEW!)
+> Groq is a **cloud LLM provider** known for ultra-fast inference. It gives us access to Llama 3.3 70B (much larger than Mistral 7B). We use it for heavy tasks like code generation while using local Ollama for lighter tasks to save API calls.
+
+### Q13: How does the pause/resume feature work? (NEW!)
+> The task checkpoint is saved to Convex database including:
+> - Current agent position
+> - All generated outputs so far
+> - Progress percentage
+> When resumed, the workflow continues from where it left off.
+
+### Q14: Explain the hybrid LLM architecture. (NEW!)
+> We have a `get_llm(for_heavy_task)` function that:
+> - Returns Groq for heavy tasks (code gen, refinement)
+> - Returns Ollama for light tasks (review, decision)
+> This optimizes both speed and API cost.
+
+### Q15: What security measures are in place for code execution?
+> Multiple layers:
+> 1. **Blocked builtins** - `open()`, `input()` disabled
+> 2. **Blocked os methods** - `os.system()`, `os.remove()`, etc.
+> 3. **Import guard** - Dangerous modules blocked
+> 4. **Timeout** - Max 10 seconds execution
+> 5. **Subprocess isolation** - Code runs in separate process
+
 ---
 
 ## 📊 Project Statistics
@@ -427,10 +640,12 @@ Backend                    Frontend
 |--------|-------|
 | **Total Agents** | 6 |
 | **Backend Language** | Python 3.11+ |
-| **Frontend Framework** | Next.js 16 |
+| **Frontend Framework** | Next.js 16 + React 19 |
 | **AI Framework** | LangGraph (migrated from CrewAI) |
 | **Local LLM** | Ollama + Mistral 7B |
 | **Cloud LLM** | Groq + Llama 3.3 70B |
+| **Cloud Backend** | Convex (real-time database) |
+| **Authentication** | NextAuth (OAuth support) |
 | **Real-time Updates** | Server-Sent Events (SSE) |
 | **Code Safety** | Sandboxed Execution |
 | **Version** | 4.0.0 (Full Stack Edition) |
@@ -439,12 +654,37 @@ Backend                    Frontend
 
 ## 🚀 How to Demo the Project
 
-1. **Start Ollama**: `ollama serve`
-2. **Start Backend**: `uvicorn app:app --reload --port 8000`
-3. **Start Frontend**: `cd frontend/software-agent && npm run dev`
+### Prerequisites:
+1. **Ollama** installed and running
+2. **Python 3.11+** with dependencies
+3. **Node.js 18+** for frontend
+4. **Groq API Key** (optional, for cloud LLM)
+5. **Convex account** (optional, for persistence)
+
+### Step-by-Step:
+
+1. **Start Ollama**: 
+   ```bash
+   ollama serve
+   ```
+
+2. **Start Backend**: 
+   ```bash
+   uvicorn app:app --reload --port 8000
+   ```
+
+3. **Start Frontend**: 
+   ```bash
+   cd frontend/software-agent && npm run dev
+   ```
+
 4. **Open Browser**: http://localhost:3000
+
 5. **Enter Prompt**: "Create a function to calculate factorial"
+
 6. **Watch Agents Work**: See real-time updates!
+
+7. **Try Groq Mode**: Select "Groq (Cloud)" for faster results
 
 ---
 
@@ -457,6 +697,9 @@ Backend                    Frontend
 5. **Sandboxing** protects against malicious code execution
 6. **Hybrid LLM** offers flexibility between local privacy and cloud speed
 7. **TypedDict State** ensures type-safe data flow between agents
+8. **Convex** provides serverless real-time database for persistence
+9. **Groq** enables faster inference with larger models (70B vs 7B)
+10. **Human-in-the-loop** support for pause/resume/approve workflows
 
 ---
 
