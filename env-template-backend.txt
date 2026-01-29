@@ -1,0 +1,11 @@
+# ===========================================
+# BACKEND .env FILE
+# Save this as: .env (in project root: ai-multi-agent/.env)
+# ===========================================
+
+# Groq API Key (optional - for cloud LLM)
+# Get your FREE key at: https://console.groq.com/keys
+GROQ_API_KEY=gsk_your_groq_api_key_here
+
+# Convex (optional - your project URL from dashboard)
+CONVEX_SITE_URL=https://vibrant-ferret-982.convex.cloud
