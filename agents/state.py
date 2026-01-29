@@ -17,6 +17,7 @@ class AgentState(TypedDict):
     # Input
     requirements: str
     task_id: str
+    model: str  # "ollama" or "groq"
     
     # Agent Outputs
     generated_code: str
@@ -24,6 +25,7 @@ class AgentState(TypedDict):
     decision: str  # "YES" or "NO"
     refined_code: str
     documentation: str
+    test_results: str  # CLI test output
     
     # Metadata
     messages: Annotated[Sequence[BaseMessage], operator.add]

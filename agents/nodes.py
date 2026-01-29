@@ -1,32 +1,118 @@
 """
 LangGraph agent nodes - each agent is implemented as a node function.
+Supports both Ollama (local) and Groq (cloud) LLMs.
 """
 
 import re
+import os
+from typing import Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from agents.state import AgentState
 from app import emit_event
 from tools.executor import execute
 
-# Initialize LLM
-llm = ChatOllama(
-    model="mistral:7b-instruct",
-    base_url="http://localhost:11434",
-    temperature=0.7
-    # Let Ollama decide GPU/CPU automatically
-    # GPU is faster, CPU is more stable
-)
+# ===========================================
+# LLM CONFIGURATION
+# ===========================================
+
+# Global LLM instances
+_ollama_llm: Optional[ChatOllama] = None
+_groq_llm = None
+_current_model = "ollama"
+_groq_api_key = ""
+
+
+def get_ollama_llm():
+    """Get or create Ollama LLM instance."""
+    global _ollama_llm
+    if _ollama_llm is None:
+        _ollama_llm = ChatOllama(
+            model="mistral:7b-instruct",
+            base_url="http://localhost:11434",
+            temperature=0.7
+        )
+    return _ollama_llm
+
+
+def get_groq_llm():
+    """Get or create Groq LLM instance."""
+    global _groq_llm, _groq_api_key
+    if _groq_llm is None and _groq_api_key:
+        try:
+            from langchain_groq import ChatGroq
+            _groq_llm = ChatGroq(
+                model="llama-3.3-70b-versatile",
+                api_key=_groq_api_key,
+                temperature=0.7
+            )
+        except ImportError:
+            print("Warning: langchain-groq not installed. Using Ollama.")
+            return get_ollama_llm()
+        except Exception as e:
+            print(f"Warning: Could not initialize Groq: {e}. Using Ollama.")
+            return get_ollama_llm()
+    return _groq_llm or get_ollama_llm()
+
+
+def set_model_config(model: str, groq_api_key: str = ""):
+    """Set the model configuration for this run."""
+    global _current_model, _groq_api_key, _groq_llm
+    _current_model = model
+    _groq_api_key = groq_api_key
+    if model == "groq" and groq_api_key:
+        _groq_llm = None  # Reset to force re-initialization
+        get_groq_llm()  # Initialize immediately
+
+
+def get_llm(for_heavy_task: bool = False):
+    """
+    Get the appropriate LLM based on configuration and task type.
+    
+    Args:
+        for_heavy_task: If True, use the heavy-duty model (Groq for code gen).
+                       If False, can use lighter model for simple tasks.
+    """
+    if _current_model == "groq" and for_heavy_task:
+        return get_groq_llm()
+    return get_ollama_llm()
 
 
 def clean_code_output(text: str) -> str:
-    """Extract code from markdown code blocks."""
+    """Extract code from markdown code blocks, ignoring text outside blocks."""
     if not text:
         return ""
-    # Remove markdown code block markers
-    cleaned = re.sub(r"```[a-zA-Z]*\n?", "", text)
-    cleaned = re.sub(r"```", "", cleaned)
-    return cleaned.strip()
+    
+    # Try to find code between triple backticks
+    # Pattern: ```language\ncode\n```
+    code_block_pattern = r"```(?:[a-zA-Z]+)?\s*\n(.*?)```"
+    matches = re.findall(code_block_pattern, text, re.DOTALL)
+    
+    if matches:
+        # Return the first code block found
+        return matches[0].strip()
+    
+    # Fallback: if no code blocks found, try removing any explanatory text
+    # and return everything after the first line that looks like code
+    lines = text.split('\n')
+    code_started = False
+    code_lines = []
+    
+    for line in lines:
+        # Skip explanatory text at the beginning
+        if not code_started:
+            # Detect start of code (import, def, class, etc.)
+            if line.strip().startswith(('import ', 'from ', 'def ', 'class ', '#', '@')):
+                code_started = True
+                code_lines.append(line)
+        else:
+            code_lines.append(line)
+    
+    if code_lines:
+        return '\n'.join(code_lines).strip()
+    
+    # Last resort: return as-is
+    return text.strip()
 
 
 # ==========================================
@@ -40,22 +126,37 @@ def code_generator_node(state: AgentState) -> AgentState:
         "agent": "coder"
     })
     
+    model_name = state.get("model", "ollama")
     emit_event(state["task_id"], {
         "type": "log",
-        "message": f"[AGENT_START coder]"
+        "message": f"[AGENT_START coder] (using {model_name})"
     })
     
     prompt = f"""You are a Senior Software Developer.
-Generate complete, runnable code for the following requirements:
+Generate complete, runnable PYTHON code for the following requirements:
 
 {state['requirements']}
 
+CRITICAL OUTPUT FORMAT:
+```python
+# your code here
+```
+
 STRICT RULES:
-- Output ONLY a single code block
-- NO explanations before or after
+- Start IMMEDIATELY with ```python (no text before it)
+- Write ONLY Python code inside the block
+- End with ``` (no text after it)
+- NO explanations, NO comments outside the code block
 - Code must be syntactically correct and runnable
-- Use minimal dependencies unless explicitly required
-- Enclose your code in markdown code block (```language ... ```)
+- MUST be Python 3.11+ compatible
+- DO NOT use input(), open(), or file I/O (sandbox restrictions)
+- Use print() to show output
+
+FORBIDDEN:
+❌ "Here's a solution..."
+❌ "This code does..."
+❌ Text before or after the code block
+✅ Start directly with: ```python
 """
     
     messages = [
@@ -64,6 +165,8 @@ STRICT RULES:
     ]
     
     try:
+        # Use heavy-duty model for code generation
+        llm = get_llm(for_heavy_task=True)
         response = llm.invoke(messages)
         code = response.content
         
@@ -146,6 +249,8 @@ DO NOT add extra sections.
     ]
     
     try:
+        # Use local model for review (cheaper)
+        llm = get_llm(for_heavy_task=False)
         response = llm.invoke(messages)
         review = response.content
         
@@ -216,6 +321,8 @@ NO punctuation. NO explanation. NO additional text.
     ]
     
     try:
+        # Use local model for decision (simple task)
+        llm = get_llm(for_heavy_task=False)
         response = llm.invoke(messages)
         decision = response.content.strip().upper()
         
@@ -305,6 +412,8 @@ STRICT OUTPUT RULE:
     ]
     
     try:
+        # Use heavy-duty model for refining
+        llm = get_llm(for_heavy_task=True)
         response = llm.invoke(messages)
         refined_code = response.content
         
@@ -408,6 +517,8 @@ Output MUST be clean, well-formatted markdown suitable for a README.
     ]
     
     try:
+        # Use local model for documentation (cheaper)
+        llm = get_llm(for_heavy_task=False)
         response = llm.invoke(messages)
         docs = response.content
         
@@ -444,6 +555,156 @@ Output MUST be clean, well-formatted markdown suitable for a README.
             "error": str(e),
             "current_agent": "doc_writer"
         }
+
+
+# ==========================================
+# NODE 6: CLI TESTER (Patent Feature)
+# ==========================================
+def cli_tester_node(state: AgentState) -> AgentState:
+    """
+    Test code in CLI and capture results.
+    This is the unique patent feature for automated testing/debugging.
+    """
+    
+    emit_event(state["task_id"], {
+        "type": "agent_start",
+        "agent": "tester"
+    })
+    
+    emit_event(state["task_id"], {
+        "type": "log",
+        "message": "[AGENT_START tester]"
+    })
+    
+    # Use refined code if available, otherwise use generated code
+    code_to_test = clean_code_output(state.get("refined_code") or state["generated_code"])
+    
+    # Detect if this is Python code (simple heuristic)
+    is_python = not any([
+        code_to_test.strip().startswith("import java."),
+        code_to_test.strip().startswith("package "),
+        "public class " in code_to_test,
+        "public static void main" in code_to_test,
+        code_to_test.strip().startswith("#include "),
+        code_to_test.strip().startswith("function "),
+        code_to_test.strip().startswith("const "),
+        code_to_test.strip().startswith("let "),
+    ])
+    
+    if not is_python:
+        # Non-Python code detected - skip execution with helpful message
+        language_detected = "Unknown"
+        if "public class " in code_to_test or "import java." in code_to_test:
+            language_detected = "Java"
+        elif "#include " in code_to_test:
+            language_detected = "C/C++"
+        elif "function " in code_to_test or "const " in code_to_test:
+            language_detected = "JavaScript"
+        
+        emit_event(state["task_id"], {
+            "type": "cli_output",
+            "message": f"⚠️ Skipped: {language_detected} code detected (Python-only sandbox)",
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"⚠️ {language_detected} code detected - sandbox only supports Python"
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "agent_end",
+            "agent": "tester"
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "[AGENT_END tester]"
+        })
+        
+        return {
+            **state,
+            "test_results": f"⚠️ Test SKIPPED\nReason: {language_detected} code detected\nSandbox only supports Python execution\nThe code appears syntactically valid but cannot be tested in Python sandbox.",
+            "current_agent": "tester",
+            "iteration_count": state.get("iteration_count", 0) + 1
+        }
+    
+    emit_event(state["task_id"], {
+        "type": "cli_output",
+        "message": "$ python main.py",
+    })
+    
+    emit_event(state["task_id"], {
+        "type": "log",
+        "message": "Running code in sandbox..."
+    })
+    
+    # Execute the code
+    result = execute(code_to_test, timeout_seconds=10)
+    
+    test_results = []
+    
+    if result["status"] == "success":
+        test_results.append("✅ Test PASSED")
+        test_results.append(f"Return code: {result.get('returncode', 0)}")
+        if result.get("stdout"):
+            test_results.append(f"Output:\n{result['stdout']}")
+        
+        emit_event(state["task_id"], {
+            "type": "cli_output",
+            "message": f"✅ Success! {result.get('stdout', 'No output')}",
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "✅ Code executed successfully!"
+        })
+    elif result["status"] == "timeout":
+        test_results.append("⏱️ Test TIMEOUT")
+        test_results.append(f"Code took too long to execute (>10s)")
+        
+        emit_event(state["task_id"], {
+            "type": "cli_output",
+            "message": "⏱️ Timeout: Code took too long to execute",
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "⏱️ Execution timed out"
+        })
+    else:
+        test_results.append("❌ Test FAILED")
+        test_results.append(f"Status: {result['status']}")
+        if result.get("stderr"):
+            test_results.append(f"Error:\n{result['stderr']}")
+        if result.get("traceback"):
+            test_results.append(f"Traceback:\n{result['traceback']}")
+        
+        emit_event(state["task_id"], {
+            "type": "cli_output",
+            "message": f"❌ Error: {result.get('stderr', result.get('traceback', 'Unknown error'))}",
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"❌ Execution failed: {result.get('stderr', 'Unknown error')}"
+        })
+    
+    emit_event(state["task_id"], {
+        "type": "agent_end",
+        "agent": "tester"
+    })
+    
+    emit_event(state["task_id"], {
+        "type": "log",
+        "message": "[AGENT_END tester]"
+    })
+    
+    return {
+        **state,
+        "test_results": "\n".join(test_results),
+        "current_agent": "tester",
+        "iteration_count": state.get("iteration_count", 0) + 1
+    }
 
 
 # ==========================================

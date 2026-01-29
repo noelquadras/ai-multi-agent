@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { PromptProvider } from "./context/PromptContext";
 import { ExecutionProvider } from "@/app/context/ExecutionContext";
+import { SessionProvider } from "@/components/providers/SessionProvider";
+import { ConvexClientProvider } from "@/components/providers/ConvexProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -29,7 +31,13 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-background text-foreground`}
       >
-        <ExecutionProvider><PromptProvider>{children}</PromptProvider></ExecutionProvider>
+        <SessionProvider>
+          <ConvexClientProvider>
+            <ExecutionProvider>
+              <PromptProvider>{children}</PromptProvider>
+            </ExecutionProvider>
+          </ConvexClientProvider>
+        </SessionProvider>
       </body>
     </html>
   );

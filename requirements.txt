@@ -6,6 +6,7 @@ langchain
 langchain-community
 langchain-core
 langchain-ollama
+langchain-groq  # Optional: for Groq cloud LLM support
 litellm
 
 # API & Server
@@ -14,6 +15,7 @@ uvicorn
 python-multipart
 pydantic
 python-dotenv
+httpx  # For async HTTP calls to Convex
 
 # Utilities
 cors
