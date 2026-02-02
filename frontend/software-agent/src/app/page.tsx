@@ -6,14 +6,7 @@ import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import {
-  Bot,
-  ArrowRight,
-  Loader2,
-  Cpu,
-  Cloud,
-  LogIn,
-} from "lucide-react";
+import { Bot, ArrowRight, Loader2, Cpu, Cloud, LogIn } from "lucide-react";
 import { useExecution } from "@/app/context/ExecutionContext";
 import { UserMenu } from "@/components/auth/UserMenu";
 
@@ -50,7 +43,7 @@ export default function HomePage() {
   const [localPrompt, setLocalPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState<string>("ollama");
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(
-    "checking"
+    "checking",
   );
 
   const models: ModelOption[] = [
@@ -93,7 +86,7 @@ export default function HomePage() {
       const res = await fetch("http://localhost:8000/api/run-crew", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           prompt: localPrompt,
           model: selectedModel,
           user_id: session?.user?.id,
@@ -108,10 +101,9 @@ export default function HomePage() {
       const data: CrewResponse = await res.json();
 
       setGlobalPrompt(localPrompt);
-      startSubscription(data.task_id);
-      router.push("/workspace");
+      router.push(`/workspace?taskId=${data.task_id}`);
     } catch (error) {
-      console.log("Network error:", error);
+      console.error("Network error:", error);
     }
   };
 
@@ -129,7 +121,7 @@ export default function HomePage() {
           </div>
           <span className="font-semibold text-sm">AI Software Team</span>
         </div>
-        
+
         <div className="flex items-center gap-4">
           {sessionStatus === "authenticated" ? (
             <UserMenu />
@@ -154,7 +146,8 @@ export default function HomePage() {
           <h1 className="text-3xl font-bold">Autonomous AI Software Team</h1>
         </div>
         <p className="text-zinc-500 mb-8">
-          Describe what you want to build. Our AI agents will generate, review, test, and document it.
+          Describe what you want to build. Our AI agents will generate, review,
+          test, and document it.
         </p>
 
         {/* API STATUS */}
@@ -199,12 +192,20 @@ export default function HomePage() {
                   } ${isRunning ? "opacity-50 cursor-not-allowed" : ""}`}
                 >
                   <div className="flex items-center gap-2 mb-2">
-                    <model.icon className={`w-4 h-4 ${
-                      selectedModel === model.id ? "text-purple-400" : "text-zinc-500"
-                    }`} />
-                    <span className={`text-sm font-medium ${
-                      selectedModel === model.id ? "text-white" : "text-zinc-300"
-                    }`}>
+                    <model.icon
+                      className={`w-4 h-4 ${
+                        selectedModel === model.id
+                          ? "text-purple-400"
+                          : "text-zinc-500"
+                      }`}
+                    />
+                    <span
+                      className={`text-sm font-medium ${
+                        selectedModel === model.id
+                          ? "text-white"
+                          : "text-zinc-300"
+                      }`}
+                    >
                       {model.name}
                     </span>
                   </div>
@@ -212,10 +213,16 @@ export default function HomePage() {
                     {model.description}
                   </p>
                   <div className="flex gap-2">
-                    <Badge variant="outline" className="text-[10px] border-zinc-700">
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] border-zinc-700"
+                    >
                       {model.speed}
                     </Badge>
-                    <Badge variant="outline" className="text-[10px] border-zinc-700">
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] border-zinc-700"
+                    >
                       {model.cost}
                     </Badge>
                   </div>
