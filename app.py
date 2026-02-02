@@ -14,6 +14,7 @@ import json
 import asyncio
 import os
 import httpx
+import sqlite3
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -72,6 +73,45 @@ async def convex_query(function_name: str, args: Dict[str, Any]):
     return None
 
 # =========================
+# SQLite DB
+# =========================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "crew_tasks.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Table for tasks
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tasks (
+            task_id TEXT PRIMARY KEY,
+            status TEXT,
+            model TEXT,
+            user_id TEXT,
+            project_id TEXT
+        )
+    ''')
+    
+    # Table for events (logs)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT,
+            type TEXT,
+            data TEXT,
+            timestamp TEXT,
+            FOREIGN KEY (task_id) REFERENCES tasks (task_id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+@app.on_event("startup")
+def startup_event():
+    init_db()
+
+# =========================
 # STORAGE
 # =========================
 tasks: Dict[str, Dict[str, Any]] = {}
@@ -85,9 +125,21 @@ task_model_config: Dict[str, str] = {}
 # EVENT EMITTER
 # =========================
 def emit_event(task_id: str, event: Dict[str, Any]):
-    event["timestamp"] = datetime.now().isoformat()
-    task_events.setdefault(task_id, []).append(event)
+    timestamp = datetime.now().isoformat()
+    event["timestamp"] = timestamp
+    
+    # Save to SQLite
+    # Add check_same_thread=False
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO events (task_id, type, data, timestamp) VALUES (?, ?, ?, ?)",
+        (task_id, event.get("type"), json.dumps(event), timestamp)
+    )
+    conn.commit()
+    conn.close()
 
+    # Still send to active website users (Streaming)
     for q in subscribers.get(task_id, []):
         q.put_nowait(event)
 
@@ -249,14 +301,32 @@ async def stream_events(task_id: str, request: Request):
 
 @app.get("/api/task/{task_id}")
 async def task_snapshot(task_id: str):
-    if task_id not in tasks:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    cursor = conn.cursor()
+    
+    cursor.execute(
+        "SELECT status, model FROM tasks WHERE task_id = ?", 
+        (task_id,)
+    )
+    task_row = cursor.fetchone()
+    
+    if not task_row:
+        conn.close()
         raise HTTPException(status_code=404, detail="Task not found")
 
+    cursor.execute(
+        "SELECT data FROM events WHERE task_id = ? ORDER BY timestamp ASC", 
+        (task_id,)
+    )
+    events = [json.loads(row[0]) for row in cursor.fetchall()]
+    
+    conn.close()
+    
     return {
         "task_id": task_id,
-        "status": tasks[task_id]["status"],
-        "model": tasks[task_id].get("model", "ollama"),
-        "events": task_events.get(task_id, []),
+        "status": task_row[0], 
+        "model": task_row[1],  
+        "events": events
     }
 
 @app.post("/api/task/{task_id}/pause")

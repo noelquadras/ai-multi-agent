@@ -9,15 +9,15 @@ import { CLIPanel } from "@/components/workspace/CLIPanel";
 import { useExecution } from "@/app/context/ExecutionContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { 
-  RefreshCw, 
-  Pause, 
-  Play, 
-  Check, 
-  X, 
+import {
+  RefreshCw,
+  Pause,
+  Play,
+  Check,
+  X,
   Terminal,
   Eye,
-  FileText 
+  FileText,
 } from "lucide-react";
 
 /* =========================
@@ -57,7 +57,8 @@ export default function WorkspacePage() {
   const { taskId } = useExecution();
 
   const [events, setEvents] = useState<TaskEvent[]>([]);
-  const [taskStatus, setTaskStatus] = useState<TaskSnapshot["status"]>("pending");
+  const [taskStatus, setTaskStatus] =
+    useState<TaskSnapshot["status"]>("pending");
   const [taskModel, setTaskModel] = useState<string>("ollama");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [outputs, setOutputs] = useState<TaskOutputs>({
@@ -209,7 +210,7 @@ export default function WorkspacePage() {
     setTaskStatus("running");
 
     const es = new EventSource(
-      `http://localhost:8000/api/task/${taskId}/events`
+      `http://localhost:8000/api/task/${taskId}/events`,
     );
 
     es.onmessage = (e) => {
@@ -232,16 +233,17 @@ export default function WorkspacePage() {
 
   const refreshStatus = async () => {
     if (!taskId) return;
-    const res = await fetch(`http://localhost:8000/api/task/${taskId}`);
-    const data: TaskSnapshot = await res.json();
-    setTaskStatus(data.status);
-    setTaskModel(data.model || "ollama");
-  };
+    try {
+      const res = await fetch(`http://localhost:8000/api/task/${taskId}`);
+      if (!res.ok) throw new Error("Task not found");
 
-  useEffect(() => {
-    if (!taskId) return;
-    refreshStatus();
-  }, [taskId]);
+      const data: TaskSnapshot = await res.json();
+      setTaskStatus(data.status);
+      setTaskModel(data.model || "ollama");
+    } catch (err) {
+      console.error("Failed to fetch task status:", err);
+    }
+  };
 
   /* =========================
      HUMAN-IN-THE-LOOP ACTIONS
@@ -319,7 +321,10 @@ export default function WorkspacePage() {
             <Badge className={getStatusColor()}>
               {taskStatus.toUpperCase()}
             </Badge>
-            <Badge variant="outline" className="border-zinc-700 text-zinc-400 text-xs">
+            <Badge
+              variant="outline"
+              className="border-zinc-700 text-zinc-400 text-xs"
+            >
               {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
             </Badge>
           </div>
@@ -348,9 +353,9 @@ export default function WorkspacePage() {
                 Resume
               </Button>
             )}
-            
+
             <div className="w-px h-6 bg-zinc-700 mx-2" />
-            
+
             <Button
               variant="ghost"
               size="sm"
@@ -437,16 +442,16 @@ export default function WorkspacePage() {
             {/* Panel Content */}
             <div className="flex-1 overflow-hidden">
               {sidePanel === "preview" && (
-                <PreviewPanel 
-                  taskStatus={{ 
-                    status: taskStatus, 
+                <PreviewPanel
+                  taskStatus={{
+                    status: taskStatus,
                     result: {
                       refined_code: outputs.code,
                       generated_code: outputs.code,
                       documentation: outputs.documentation,
                       review_report: outputs.review,
-                    }
-                  }} 
+                    },
+                  }}
                 />
               )}
               {sidePanel === "cli" && (
