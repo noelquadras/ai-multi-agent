@@ -1,23 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { AgentPanel } from "@/components/workspace/AgentPanel";
 import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
 import { PreviewPanel } from "@/components/workspace/PreviewPanel";
 import { CLIPanel } from "@/components/workspace/CLIPanel";
-import { useExecution } from "@/app/context/ExecutionContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { 
-  RefreshCw, 
-  Pause, 
-  Play, 
-  Check, 
-  X, 
+import {
+  RefreshCw,
+  Pause,
+  Play,
+  Check,
+  X,
   Terminal,
   Eye,
-  FileText 
+  FileText,
 } from "lucide-react";
 
 /* =========================
@@ -54,10 +54,12 @@ type SidePanel = "preview" | "cli" | "docs";
 ========================= */
 
 export default function WorkspacePage() {
-  const { taskId } = useExecution();
+  const searchParams = useSearchParams();
+  const taskId = searchParams.get("taskId");
 
   const [events, setEvents] = useState<TaskEvent[]>([]);
-  const [taskStatus, setTaskStatus] = useState<TaskSnapshot["status"]>("pending");
+  const [taskStatus, setTaskStatus] =
+    useState<TaskSnapshot["status"]>("pending");
   const [taskModel, setTaskModel] = useState<string>("ollama");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [outputs, setOutputs] = useState<TaskOutputs>({
@@ -126,10 +128,8 @@ export default function WorkspacePage() {
   ========================= */
 
   const applyEvent = (event: TaskEvent) => {
-    // Update agent status
     setAgents((prev) => {
       const map = new Map(prev.map((a) => [a.id, { ...a }]));
-
       if (event.type === "agent_start" || event.type === "agent_end") {
         const agent = map.get(event.agent);
         if (agent) {
@@ -143,7 +143,6 @@ export default function WorkspacePage() {
           map.set(agent.id, agent);
         }
       }
-
       if (event.type === "tool_error" && event.agent) {
         const agent = map.get(event.agent);
         if (agent) {
@@ -151,11 +150,9 @@ export default function WorkspacePage() {
           map.set(agent.id, agent);
         }
       }
-
       return Array.from(map.values());
     });
 
-    // Update outputs based on event type
     if (event.type === "code_output" && event.code) {
       setOutputs((prev) => ({ ...prev, code: event.code }));
     }
@@ -171,31 +168,39 @@ export default function WorkspacePage() {
     if (event.type === "test_output" && event.results) {
       setOutputs((prev) => ({ ...prev, testResults: event.results }));
     }
-
-    // CLI logs
     if (event.type === "cli_output" && event.message) {
       setCliLogs((prev) => [...prev, event.message]);
     }
 
-    // Task status updates
-    if (event.type === "task_completed") {
-      setTaskStatus("completed");
-    }
-    if (event.type === "task_paused") {
-      setTaskStatus("paused");
-    }
-    if (event.type === "task_resumed") {
-      setTaskStatus("running");
-    }
+    if (event.type === "task_completed") setTaskStatus("completed");
+    if (event.type === "task_paused") setTaskStatus("paused");
+    if (event.type === "task_resumed") setTaskStatus("running");
   };
 
   /* =========================
-     SSE SUBSCRIPTION
+     SSE SUBSCRIPTION & REFRESH
   ========================= */
+
+  const refreshStatus = async (id: string) => {
+    try {
+      const res = await fetch(`http://localhost:8000/api/task/${id}`);
+      if (!res.ok) throw new Error("Task not found");
+      const data: TaskSnapshot = await res.json();
+      setTaskStatus(data.status);
+      setTaskModel(data.model || "ollama");
+      // Pre-apply historical events to the UI
+      if (data.events) {
+        data.events.forEach(applyEvent);
+      }
+    } catch (err) {
+      console.error("Failed to fetch task status:", err);
+    }
+  };
 
   useEffect(() => {
     if (!taskId) return;
 
+    // Reset state for new task
     setAgents(Object.values(AGENT_REGISTRY));
     setEvents([]);
     setOutputs({
@@ -206,10 +211,12 @@ export default function WorkspacePage() {
       testResults: "",
     });
     setCliLogs([]);
-    setTaskStatus("running");
+
+    // Initial fetch to sync with DB
+    refreshStatus(taskId);
 
     const es = new EventSource(
-      `http://localhost:8000/api/task/${taskId}/events`
+      `http://localhost:8000/api/task/${taskId}/events`,
     );
 
     es.onmessage = (e) => {
@@ -227,23 +234,6 @@ export default function WorkspacePage() {
   }, [taskId]);
 
   /* =========================
-     STATUS SNAPSHOT
-  ========================= */
-
-  const refreshStatus = async () => {
-    if (!taskId) return;
-    const res = await fetch(`http://localhost:8000/api/task/${taskId}`);
-    const data: TaskSnapshot = await res.json();
-    setTaskStatus(data.status);
-    setTaskModel(data.model || "ollama");
-  };
-
-  useEffect(() => {
-    if (!taskId) return;
-    refreshStatus();
-  }, [taskId]);
-
-  /* =========================
      HUMAN-IN-THE-LOOP ACTIONS
   ========================= */
 
@@ -252,7 +242,6 @@ export default function WorkspacePage() {
     await fetch(`http://localhost:8000/api/task/${taskId}/pause`, {
       method: "POST",
     });
-    setTaskStatus("paused");
   };
 
   const handleResume = async () => {
@@ -260,7 +249,6 @@ export default function WorkspacePage() {
     await fetch(`http://localhost:8000/api/task/${taskId}/resume`, {
       method: "POST",
     });
-    setTaskStatus("running");
   };
 
   const handleApprove = async () => {
@@ -278,7 +266,7 @@ export default function WorkspacePage() {
   };
 
   /* =========================
-     UI
+     UI RENDER
   ========================= */
 
   if (!taskId) {
@@ -305,36 +293,34 @@ export default function WorkspacePage() {
   };
 
   return (
-    <div className="flex h-screen bg-[#050505] overflow-hidden">
-      {/* AGENTS */}
+    <div className="flex h-screen bg-background overflow-hidden">
       <div className="hidden md:block flex-none">
         <AgentPanel agents={agents} />
       </div>
 
-      {/* MAIN */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* HEADER */}
-        <div className="h-14 flex items-center justify-between px-4 border-b border-[#1F1F1F] bg-[#0A0A0A]">
+        <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
           <div className="flex items-center gap-3">
             <Badge className={getStatusColor()}>
               {taskStatus.toUpperCase()}
             </Badge>
-            <Badge variant="outline" className="border-zinc-700 text-zinc-400 text-xs">
+            <Badge
+              variant="outline"
+              className="border-border text-muted-foreground text-xs"
+            >
               {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
             </Badge>
           </div>
 
-          {/* Human-in-the-loop controls */}
           <div className="flex items-center gap-2">
             {taskStatus === "running" && (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handlePause}
-                className="text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10"
+                className="text-yellow-500 hover:text-yellow-600"
               >
-                <Pause className="w-4 h-4 mr-1" />
-                Pause
+                <Pause className="w-4 h-4 mr-1" /> Pause
               </Button>
             )}
             {taskStatus === "paused" && (
@@ -342,81 +328,68 @@ export default function WorkspacePage() {
                 variant="ghost"
                 size="sm"
                 onClick={handleResume}
-                className="text-green-400 hover:text-green-300 hover:bg-green-500/10"
+                className="text-green-500 hover:text-green-600"
               >
-                <Play className="w-4 h-4 mr-1" />
-                Resume
+                <Play className="w-4 h-4 mr-1" /> Resume
               </Button>
             )}
-            
-            <div className="w-px h-6 bg-zinc-700 mx-2" />
-            
+            <div className="w-px h-6 bg-border mx-2" />
             <Button
               variant="ghost"
               size="sm"
               onClick={handleApprove}
               disabled={!outputs.code}
-              className="text-green-400 hover:text-green-300 hover:bg-green-500/10 disabled:opacity-50"
+              className="text-green-500 disabled:opacity-50"
             >
-              <Check className="w-4 h-4 mr-1" />
-              Approve
+              <Check className="w-4 h-4 mr-1" /> Approve
             </Button>
             <Button
               variant="ghost"
               size="sm"
               onClick={handleReject}
               disabled={!outputs.code}
-              className="text-red-400 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+              className="text-red-500 disabled:opacity-50"
             >
-              <X className="w-4 h-4 mr-1" />
-              Reject
+              <X className="w-4 h-4 mr-1" /> Reject
             </Button>
-
-            <div className="w-px h-6 bg-zinc-700 mx-2" />
-
+            <div className="w-px h-6 bg-border mx-2" />
             <Button
               variant="ghost"
               size="icon"
-              onClick={refreshStatus}
-              className="text-zinc-400"
+              onClick={() => taskId && refreshStatus(taskId)}
+              className="text-muted-foreground"
             >
               <RefreshCw className="w-4 h-4" />
             </Button>
           </div>
         </div>
 
-        {/* BODY */}
         <div className="flex flex-1 overflow-hidden">
-          {/* Code Editor */}
           <div className="flex-1 overflow-hidden">
             <CodeWorkspace code={outputs.code} isReadOnly />
           </div>
 
-          {/* Side Panel Selector + Content */}
-          <div className="hidden xl:flex flex-col border-l border-[#1F1F1F]">
-            {/* Panel Tabs */}
-            <div className="flex border-b border-[#1F1F1F] bg-[#0A0A0A]">
+          <div className="hidden xl:flex flex-col border-l border-border">
+            <div className="flex border-b border-border bg-card">
               <button
                 onClick={() => setSidePanel("preview")}
                 className={`flex items-center gap-2 px-4 py-2 text-sm ${
                   sidePanel === "preview"
-                    ? "bg-[#141414] text-white border-b-2 border-purple-500"
-                    : "text-zinc-500 hover:text-zinc-300"
+                    ? "bg-muted text-foreground border-b-2 border-purple-500"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <Eye className="w-4 h-4" />
-                Preview
+                <Eye className="w-4 h-4" /> Preview
               </button>
               <button
                 onClick={() => setSidePanel("cli")}
                 className={`flex items-center gap-2 px-4 py-2 text-sm ${
                   sidePanel === "cli"
-                    ? "bg-[#141414] text-white border-b-2 border-green-500"
-                    : "text-zinc-500 hover:text-zinc-300"
+                    ? "bg-muted text-foreground border-b-2 border-green-500"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <Terminal className="w-4 h-4" />
-                CLI Tests
+                <Terminal className="w-4 h-4" /> CLI Tests
                 {cliLogs.length > 0 && (
                   <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                 )}
@@ -425,46 +398,44 @@ export default function WorkspacePage() {
                 onClick={() => setSidePanel("docs")}
                 className={`flex items-center gap-2 px-4 py-2 text-sm ${
                   sidePanel === "docs"
-                    ? "bg-[#141414] text-white border-b-2 border-blue-500"
-                    : "text-zinc-500 hover:text-zinc-300"
+                    ? "bg-muted text-foreground border-b-2 border-blue-500"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <FileText className="w-4 h-4" />
-                Docs
+                <FileText className="w-4 h-4" /> Docs
               </button>
             </div>
 
-            {/* Panel Content */}
             <div className="flex-1 overflow-hidden">
               {sidePanel === "preview" && (
-                <PreviewPanel 
-                  taskStatus={{ 
-                    status: taskStatus, 
+                <PreviewPanel
+                  taskStatus={{
+                    status: taskStatus,
                     result: {
                       refined_code: outputs.code,
                       generated_code: outputs.code,
                       documentation: outputs.documentation,
                       review_report: outputs.review,
-                    }
-                  }} 
+                    },
+                  }}
                 />
               )}
               {sidePanel === "cli" && (
                 <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
               )}
               {sidePanel === "docs" && (
-                <div className="w-[400px] h-full bg-[#0A0A0A] p-4 overflow-auto">
-                  <h3 className="text-sm font-semibold text-zinc-300 mb-4">
+                <div className="w-[400px] h-full bg-card p-4 overflow-auto">
+                  <h3 className="text-sm font-semibold text-foreground mb-4">
                     Generated Documentation
                   </h3>
                   {outputs.documentation ? (
-                    <div className="prose prose-invert prose-sm max-w-none">
-                      <pre className="whitespace-pre-wrap text-xs text-zinc-400 font-mono">
+                    <div className="prose prose-sm max-w-none">
+                      <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
                         {outputs.documentation}
                       </pre>
                     </div>
                   ) : (
-                    <p className="text-zinc-500 text-sm">
+                    <p className="text-muted-foreground text-sm">
                       Documentation will appear here once generated.
                     </p>
                   )}
@@ -474,8 +445,7 @@ export default function WorkspacePage() {
           </div>
         </div>
 
-        {/* ACTIVITY */}
-        <div className="h-72 border-t border-[#1F1F1F] overflow-hidden">
+        <div className="h-72 border-t border-border overflow-hidden">
           <ActivityPanel events={events} />
         </div>
       </div>

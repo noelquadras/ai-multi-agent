@@ -12,6 +12,7 @@ from agents.nodes import (
     doc_writer_node,
     cli_tester_node,
     should_refine,
+    should_refine_after_test,
     set_model_config
 )
 from app import emit_event
@@ -77,7 +78,14 @@ def create_agent_graph(include_cli_test: bool = True):
             }
         )
         workflow.add_edge("refine", "test")
-        workflow.add_edge("test", "document")
+        workflow.add_conditional_edges(
+            "test",
+            should_refine_after_test, # Our new function
+            {
+                "refine": "refine",    # Loop back
+                "document": "document" # Move forward
+            }
+        )
     else:
         workflow.add_conditional_edges(
             "decide",

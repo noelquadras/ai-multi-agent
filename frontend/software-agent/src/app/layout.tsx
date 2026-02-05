@@ -5,7 +5,7 @@ import { PromptProvider } from "./context/PromptContext";
 import { ExecutionProvider } from "@/app/context/ExecutionContext";
 import { SessionProvider } from "@/components/providers/SessionProvider";
 import { ConvexClientProvider } from "@/components/providers/ConvexProvider";
-
+import { ThemeProvider } from "@/components/providers/ThemeProvider";
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -23,21 +23,23 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-background text-foreground`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-background text-foreground transition-colors`}
       >
-        <SessionProvider>
-          <ConvexClientProvider>
-            <ExecutionProvider>
-              <PromptProvider>{children}</PromptProvider>
-            </ExecutionProvider>
-          </ConvexClientProvider>
-        </SessionProvider>
+        <ThemeProvider>
+          <SessionProvider>
+            <ConvexClientProvider>
+              <ExecutionProvider>
+                <PromptProvider>{children}</PromptProvider>
+              </ExecutionProvider>
+            </ConvexClientProvider>
+          </SessionProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

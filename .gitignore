@@ -53,3 +53,7 @@ __pycache__/app.cpython-312.pyc
 __pycache__/main.cpython-312.pyc
 agents/__pycache__/config.cpython-312.pyc
 tasks/__pycache__/tasks.cpython-312.pyc
+tools/__pycache__/
+
+#DB
+crew_tasks.db

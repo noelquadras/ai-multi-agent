@@ -393,10 +393,13 @@ Original Code:
 Review Feedback:
 {state['review_report']}
 
+CLI Test Results (if any):
+{state.get('test_results', 'No test results available.')}
+
 Your task:
 1. Read the original code
 2. Read the review feedback carefully
-3. Apply ALL suggested fixes and improvements
+3. Fix bugs identified in the Review Feedback AND any errors shown in the CLI Test Results.
 4. Output ONLY the corrected code in a single code block
 
 STRICT OUTPUT RULE:
@@ -643,12 +646,12 @@ def cli_tester_node(state: AgentState) -> AgentState:
     
     test_results = []
     
-    if result["status"] == "success":
+    if result["status"] == "success" and result.get("returncode") == 0:
         test_results.append("✅ Test PASSED")
-        test_results.append(f"Return code: {result.get('returncode', 0)}")
+        test_results.append(f"Return code: 0")
         if result.get("stdout"):
             test_results.append(f"Output:\n{result['stdout']}")
-        
+    
         emit_event(state["task_id"], {
             "type": "cli_output",
             "message": f"✅ Success! {result.get('stdout', 'No output')}",
@@ -658,6 +661,21 @@ def cli_tester_node(state: AgentState) -> AgentState:
             "type": "log",
             "message": "✅ Code executed successfully!"
         })
+    elif result["status"] == "exception" or result["status"] == "error":
+            test_results.append("❌ Test FAILED")
+            test_results.append(f"Error Type: {result.get('status').upper()}")
+    
+            # this is the part that will show "AttributeError: 'set' object has no attribute 'count'"
+            if result.get("traceback"):
+                test_results.append(f"Traceback:\n{result['traceback']}")
+            elif result.get("stderr"):
+                test_results.append(f"Error:\n{result['stderr']}")
+
+            emit_event (state["task_id"], {
+                "type": "cli_output",
+                "message": f"❌ Error: {result.get('stderr', 'Python Execution Failed')}",
+            })
+
     elif result["status"] == "timeout":
         test_results.append("⏱️ Test TIMEOUT")
         test_results.append(f"Code took too long to execute (>10s)")
@@ -732,3 +750,21 @@ def should_refine(state: AgentState) -> str:
             "message": "✅ Decision: Code is good, skipping refinement"
         })
         return "document"
+
+
+# ==========================================
+# CONDITIONAL EDGE: Should Refine after Testing?
+# ==========================================
+def should_refine_after_test(state: AgentState) -> str:
+    """
+    Decide if we should go to documentation or loop back for fixes.
+    """
+    results = state.get("test_results", "")
+    iteration_count = state.get("iteration_count", 0)
+
+    # If the test passed, or we've tried too many times (e.g., 3), move to docs
+    if "✅ Test PASSED" in results or iteration_count >= 15:
+        return "document"
+    
+    # If it failed or timed out, send it back to the refiner
+    return "refine"
