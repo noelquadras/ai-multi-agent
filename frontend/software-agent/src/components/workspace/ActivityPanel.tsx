@@ -29,19 +29,40 @@ export type TaskEvent =
   | { type: "agent_start"; agent: string; timestamp: string }
   | { type: "agent_end"; agent: string; timestamp: string }
   | { type: "tool_start"; agent: string; tool: string; timestamp: string }
-  | { type: "tool_error"; agent: string; tool: string; error: string; timestamp: string }
+  | {
+      type: "tool_error";
+      agent: string;
+      tool: string;
+      error: string;
+      timestamp: string;
+    }
   | { type: "system_error"; error: string; timestamp: string }
   | { type: "log"; message: string; timestamp: string }
   | { type: "code_output"; agent: string; code: string; timestamp: string }
   | { type: "review_output"; agent: string; review: string; timestamp: string }
-  | { type: "decision_output"; agent: string; decision: string; timestamp: string }
-  | { type: "doc_output"; agent: string; documentation: string; timestamp: string }
+  | {
+      type: "decision_output";
+      agent: string;
+      decision: string;
+      timestamp: string;
+    }
+  | {
+      type: "doc_output";
+      agent: string;
+      documentation: string;
+      timestamp: string;
+    }
   | { type: "test_output"; agent: string; results: string; timestamp: string }
   | { type: "cli_output"; message: string; timestamp: string }
   | { type: "task_completed"; timestamp: string }
   | { type: "task_paused"; message: string; timestamp: string }
   | { type: "task_resumed"; message: string; timestamp: string }
-  | { type: "human_approval"; approved: boolean; message: string; timestamp: string };
+  | {
+      type: "human_approval";
+      approved: boolean;
+      message: string;
+      timestamp: string;
+    };
 
 interface ActivityPanelProps {
   events?: TaskEvent[];
@@ -78,11 +99,7 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
   ========================= */
 
   const agents = Array.from(
-    new Set(
-      events
-        .filter((e) => "agent" in e)
-        .map((e) => (e as any).agent)
-    )
+    new Set(events.filter((e) => "agent" in e).map((e) => (e as any).agent)),
   );
 
   /* =========================
@@ -104,11 +121,11 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
   ========================= */
 
   return (
-    <Card className="h-full border-none rounded-none border-t border-[#1F1F1F] bg-[#050505]">
+    <Card className="h-full border-none rounded-none border-t border-border bg-background">
       {/* HEADER */}
-      <CardHeader className="h-10 px-4 flex flex-row items-center justify-between border-b border-[#1F1F1F] bg-[#0A0A0A]">
-        <div className="flex items-center gap-2 text-zinc-300 text-xs font-bold">
-          <Terminal className="w-3 h-3 text-purple-400" />
+      <CardHeader className="h-10 px-4 flex flex-row items-center justify-between border-b border-border bg-card">
+        <div className="flex items-center gap-2 text-muted-foreground text-xs font-bold">
+          <Terminal className="w-3 h-3 text-purple-500" />
           ACTIVITY
         </div>
 
@@ -128,7 +145,7 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
 
           <Badge
             variant="outline"
-            className="border-zinc-800 text-zinc-500 text-[10px]"
+            className="border-border text-muted-foreground text-[10px]"
           >
             {visibleEvents.length} events
           </Badge>
@@ -137,8 +154,8 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
 
       {/* AGENT FILTER */}
       {agents.length > 0 && (
-        <div className="px-4 py-2 border-b border-[#1F1F1F] bg-[#070707] flex items-center gap-2 overflow-x-auto">
-          <Users className="w-3 h-3 text-zinc-500" />
+        <div className="px-4 py-2 border-b border-border bg-card flex items-center gap-2 overflow-x-auto">
+          <Users className="w-3 h-3 text-muted-foreground bg-card" />
 
           <AgentFilterButton
             label="All"
@@ -163,10 +180,10 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="h-full px-4 py-3 overflow-y-auto space-y-1 font-mono text-[11px]"
+            className="h-full px-4 py-3 overflow-y-auto space-y-1 font-mono text-[11px] text-foreground"
           >
             {visibleEvents.length === 0 && (
-              <div className="text-zinc-500">
+              <div className="text-muted-foreground">
                 No activity for selected agent
               </div>
             )}
@@ -200,7 +217,7 @@ function AgentFilterButton({
       className={`px-2 py-1 text-[10px] rounded border transition-colors whitespace-nowrap ${
         active
           ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
-          : "bg-[#0A0A0A] text-zinc-500 border-zinc-800 hover:text-zinc-300"
+          : "bg-card text-zinc-500 border-zinc-800 hover:text-zinc-300"
       }`}
     >
       {label}

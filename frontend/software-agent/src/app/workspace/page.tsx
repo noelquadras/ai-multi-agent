@@ -1,15 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-// --- FIX 1: Import useSearchParams from next/navigation ---
 import { useSearchParams } from "next/navigation";
 import { AgentPanel } from "@/components/workspace/AgentPanel";
 import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
 import { PreviewPanel } from "@/components/workspace/PreviewPanel";
 import { CLIPanel } from "@/components/workspace/CLIPanel";
-// --- Note: Ensure useExecution is used or removed if not needed ---
-import { useExecution } from "@/app/context/ExecutionContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -269,7 +266,7 @@ export default function WorkspacePage() {
   };
 
   /* =========================
-     UI RENDER (NO CHANGES)
+     UI RENDER
   ========================= */
 
   if (!taskId) {
@@ -296,20 +293,20 @@ export default function WorkspacePage() {
   };
 
   return (
-    <div className="flex h-screen bg-[#050505] overflow-hidden">
+    <div className="flex h-screen bg-background overflow-hidden">
       <div className="hidden md:block flex-none">
         <AgentPanel agents={agents} />
       </div>
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="h-14 flex items-center justify-between px-4 border-b border-[#1F1F1F] bg-[#0A0A0A]">
+        <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
           <div className="flex items-center gap-3">
             <Badge className={getStatusColor()}>
               {taskStatus.toUpperCase()}
             </Badge>
             <Badge
               variant="outline"
-              className="border-zinc-700 text-zinc-400 text-xs"
+              className="border-border text-muted-foreground text-xs"
             >
               {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
             </Badge>
@@ -321,7 +318,7 @@ export default function WorkspacePage() {
                 variant="ghost"
                 size="sm"
                 onClick={handlePause}
-                className="text-yellow-400 hover:text-yellow-300"
+                className="text-yellow-500 hover:text-yellow-600"
               >
                 <Pause className="w-4 h-4 mr-1" /> Pause
               </Button>
@@ -331,18 +328,18 @@ export default function WorkspacePage() {
                 variant="ghost"
                 size="sm"
                 onClick={handleResume}
-                className="text-green-400 hover:text-green-300"
+                className="text-green-500 hover:text-green-600"
               >
                 <Play className="w-4 h-4 mr-1" /> Resume
               </Button>
             )}
-            <div className="w-px h-6 bg-zinc-700 mx-2" />
+            <div className="w-px h-6 bg-border mx-2" />
             <Button
               variant="ghost"
               size="sm"
               onClick={handleApprove}
               disabled={!outputs.code}
-              className="text-green-400 disabled:opacity-50"
+              className="text-green-500 disabled:opacity-50"
             >
               <Check className="w-4 h-4 mr-1" /> Approve
             </Button>
@@ -351,16 +348,16 @@ export default function WorkspacePage() {
               size="sm"
               onClick={handleReject}
               disabled={!outputs.code}
-              className="text-red-400 disabled:opacity-50"
+              className="text-red-500 disabled:opacity-50"
             >
               <X className="w-4 h-4 mr-1" /> Reject
             </Button>
-            <div className="w-px h-6 bg-zinc-700 mx-2" />
+            <div className="w-px h-6 bg-border mx-2" />
             <Button
               variant="ghost"
               size="icon"
               onClick={() => taskId && refreshStatus(taskId)}
-              className="text-zinc-400"
+              className="text-muted-foreground"
             >
               <RefreshCw className="w-4 h-4" />
             </Button>
@@ -372,26 +369,38 @@ export default function WorkspacePage() {
             <CodeWorkspace code={outputs.code} isReadOnly />
           </div>
 
-          <div className="hidden xl:flex flex-col border-l border-[#1F1F1F]">
-            <div className="flex border-b border-[#1F1F1F] bg-[#0A0A0A]">
+          <div className="hidden xl:flex flex-col border-l border-border">
+            <div className="flex border-b border-border bg-card">
               <button
                 onClick={() => setSidePanel("preview")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "preview" ? "bg-[#141414] text-white border-b-2 border-purple-500" : "text-zinc-500 hover:text-zinc-300"}`}
+                className={`flex items-center gap-2 px-4 py-2 text-sm ${
+                  sidePanel === "preview"
+                    ? "bg-muted text-foreground border-b-2 border-purple-500"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
               >
                 <Eye className="w-4 h-4" /> Preview
               </button>
               <button
                 onClick={() => setSidePanel("cli")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "cli" ? "bg-[#141414] text-white border-b-2 border-green-500" : "text-zinc-500 hover:text-zinc-300"}`}
+                className={`flex items-center gap-2 px-4 py-2 text-sm ${
+                  sidePanel === "cli"
+                    ? "bg-muted text-foreground border-b-2 border-green-500"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
               >
-                <Terminal className="w-4 h-4" /> CLI Tests{" "}
+                <Terminal className="w-4 h-4" /> CLI Tests
                 {cliLogs.length > 0 && (
                   <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                 )}
               </button>
               <button
                 onClick={() => setSidePanel("docs")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "docs" ? "bg-[#141414] text-white border-b-2 border-blue-500" : "text-zinc-500 hover:text-zinc-300"}`}
+                className={`flex items-center gap-2 px-4 py-2 text-sm ${
+                  sidePanel === "docs"
+                    ? "bg-muted text-foreground border-b-2 border-blue-500"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
               >
                 <FileText className="w-4 h-4" /> Docs
               </button>
@@ -415,18 +424,18 @@ export default function WorkspacePage() {
                 <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
               )}
               {sidePanel === "docs" && (
-                <div className="w-[400px] h-full bg-[#0A0A0A] p-4 overflow-auto">
-                  <h3 className="text-sm font-semibold text-zinc-300 mb-4">
+                <div className="w-[400px] h-full bg-card p-4 overflow-auto">
+                  <h3 className="text-sm font-semibold text-foreground mb-4">
                     Generated Documentation
                   </h3>
                   {outputs.documentation ? (
-                    <div className="prose prose-invert prose-sm max-w-none">
-                      <pre className="whitespace-pre-wrap text-xs text-zinc-400 font-mono">
+                    <div className="prose prose-sm max-w-none">
+                      <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
                         {outputs.documentation}
                       </pre>
                     </div>
                   ) : (
-                    <p className="text-zinc-500 text-sm">
+                    <p className="text-muted-foreground text-sm">
                       Documentation will appear here once generated.
                     </p>
                   )}
@@ -436,7 +445,7 @@ export default function WorkspacePage() {
           </div>
         </div>
 
-        <div className="h-72 border-t border-[#1F1F1F] overflow-hidden">
+        <div className="h-72 border-t border-border overflow-hidden">
           <ActivityPanel events={events} />
         </div>
       </div>

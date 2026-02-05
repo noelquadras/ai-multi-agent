@@ -25,11 +25,15 @@ interface FilesPanelProps {
   onFileSelect?: (content: string, filename: string) => void;
 }
 
-export function FilesPanel({ projectId, userId, onFileSelect }: FilesPanelProps) {
+export function FilesPanel({
+  projectId,
+  userId,
+  onFileSelect,
+}: FilesPanelProps) {
   const [isUploading, setIsUploading] = useState(false);
-  
+
   // Query files from Convex (only if projectId is provided)
-  const files = projectId 
+  const files = projectId
     ? useQuery(api.files.getProjectFiles, { projectId })
     : [];
 
@@ -39,16 +43,18 @@ export function FilesPanel({ projectId, userId, onFileSelect }: FilesPanelProps)
   const generateUploadUrl = useMutation(api.files.generateUploadUrl);
 
   const getFileIcon = (filename: string) => {
-    if (filename.endsWith(".py")) return <FileCode className="w-4 h-4 text-blue-400" />;
+    if (filename.endsWith(".py"))
+      return <FileCode className="w-4 h-4 text-blue-400" />;
     if (filename.endsWith(".js") || filename.endsWith(".ts"))
       return <FileCode className="w-4 h-4 text-yellow-400" />;
-    if (filename.endsWith(".md")) return <FileText className="w-4 h-4 text-cyan-400" />;
+    if (filename.endsWith(".md"))
+      return <FileText className="w-4 h-4 text-cyan-400" />;
     return <File className="w-4 h-4 text-zinc-400" />;
   };
 
   const handleSaveFile = async (name: string, content: string) => {
     if (!projectId || !userId) return;
-    
+
     await createTextFile({
       projectId,
       userId,
@@ -101,24 +107,27 @@ export function FilesPanel({ projectId, userId, onFileSelect }: FilesPanelProps)
   }
 
   return (
-    <div className="w-64 h-full bg-[#0A0A0A] border-r border-[#1F1F1F] flex flex-col">
+    <div className="w-64 h-full bg-card border-r border-border flex flex-col">
       {/* Header */}
-      <div className="p-4 border-b border-[#1F1F1F]">
+      <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Folder className="w-4 h-4 text-purple-400" />
-            <h3 className="text-sm font-semibold text-zinc-300">Files</h3>
+            <Folder className="w-4 h-4 text-purple-500" />
+            <h3 className="text-sm font-semibold text-foreground">Files</h3>
           </div>
-          <Badge variant="outline" className="text-[10px] border-zinc-700">
+          <Badge
+            variant="outline"
+            className="text-[10px] border-border text-muted-foreground"
+          >
             {files?.length || 0}
           </Badge>
         </div>
-        
+
         <div className="flex gap-2">
           <Button
             variant="ghost"
             size="sm"
-            className="flex-1 text-xs h-7 bg-[#141414] hover:bg-[#1F1F1F]"
+            className="flex-1 text-xs h-7 bg-muted hover:bg-border"
             onClick={() => {
               const name = prompt("Enter file name:");
               if (name) handleSaveFile(name, "# New file\n");
@@ -130,7 +139,7 @@ export function FilesPanel({ projectId, userId, onFileSelect }: FilesPanelProps)
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 bg-[#141414] hover:bg-[#1F1F1F]"
+            className="h-7 w-7 bg-muted hover:bg-border"
           >
             <Upload className="w-3 h-3" />
           </Button>
@@ -141,9 +150,9 @@ export function FilesPanel({ projectId, userId, onFileSelect }: FilesPanelProps)
       <div className="flex-1 overflow-auto">
         {!files || files.length === 0 ? (
           <div className="p-4 text-center">
-            <File className="w-8 h-8 text-zinc-700 mx-auto mb-2" />
-            <p className="text-xs text-zinc-500">No files yet</p>
-            <p className="text-xs text-zinc-600 mt-1">
+            <File className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+            <p className="text-xs text-muted-foreground">No files yet</p>
+            <p className="text-xs text-muted-foreground mt-1">
               Files will appear here after code generation
             </p>
           </div>
@@ -152,29 +161,31 @@ export function FilesPanel({ projectId, userId, onFileSelect }: FilesPanelProps)
             {files.map((file) => (
               <div
                 key={file._id}
-                className="group flex items-center justify-between p-2 rounded-lg hover:bg-[#141414] cursor-pointer transition-colors"
+                className="group flex items-center justify-between p-2 rounded-lg hover:bg-muted cursor-pointer transition-colors"
                 onClick={() => handleFileClick(file)}
               >
                 <div className="flex items-center gap-2 min-w-0">
                   {getFileIcon(file.name)}
                   <div className="min-w-0">
-                    <p className="text-sm text-zinc-300 truncate">{file.name}</p>
-                    <p className="text-[10px] text-zinc-600">
+                    <p className="text-sm text-foreground truncate">
+                      {file.name}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
                       {formatSize(file.size)} • {formatDate(file.updatedAt)}
                     </p>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   {file.isGenerated && (
-                    <Badge className="text-[8px] px-1 py-0 bg-purple-500/20 text-purple-400">
+                    <Badge className="text-[8px] px-1 py-0 bg-purple-500/20 text-purple-500">
                       AI
                     </Badge>
                   )}
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-6 w-6 hover:bg-red-500/20 hover:text-red-400"
+                    className="h-6 w-6 hover:bg-red-500/20 hover:text-red-500"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDeleteFile(file._id);
@@ -190,8 +201,8 @@ export function FilesPanel({ projectId, userId, onFileSelect }: FilesPanelProps)
       </div>
 
       {/* Footer */}
-      <div className="p-3 border-t border-[#1F1F1F] bg-[#070707]">
-        <p className="text-[10px] text-zinc-600 text-center">
+      <div className="p-3 border-t border-border bg-muted">
+        <p className="text-[10px] text-muted-foreground text-center">
           Files stored in Convex
         </p>
       </div>

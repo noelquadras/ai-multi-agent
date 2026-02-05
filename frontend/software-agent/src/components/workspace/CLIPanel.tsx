@@ -35,13 +35,15 @@ export function CLIPanel({ logs, testResults }: CLIPanelProps) {
   const status = getTestStatus();
 
   return (
-    <div className="w-[400px] h-full bg-[#0A0A0A] flex flex-col">
+    <div className="w-100 h-full bg-card flex flex-col">
       {/* Header */}
-      <div className="p-4 border-b border-[#1F1F1F]">
+      <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Terminal className="w-4 h-4 text-green-500" />
-            <h3 className="text-sm font-semibold text-zinc-300">CLI Test Output</h3>
+            <h3 className="text-sm font-semibold text-foreground">
+              CLI Test Output
+            </h3>
           </div>
           {status && (
             <Badge className={`${status.color} bg-opacity-20`}>
@@ -50,7 +52,7 @@ export function CLIPanel({ logs, testResults }: CLIPanelProps) {
             </Badge>
           )}
         </div>
-        <p className="text-xs text-zinc-500 mt-1">
+        <p className="text-xs text-muted-foreground mt-1">
           Sandboxed execution results from the tester agent
         </p>
       </div>
@@ -58,11 +60,11 @@ export function CLIPanel({ logs, testResults }: CLIPanelProps) {
       {/* Terminal Output */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-auto p-4 bg-[#0d1117] font-mono text-xs"
+        className="flex-1 overflow-auto p-4 bg-muted font-mono text-xs"
       >
         {/* Command History */}
         {logs.length === 0 && !testResults ? (
-          <div className="text-zinc-600 flex items-center gap-2">
+          <div className="text-muted-foreground flex items-center gap-2">
             <span className="text-green-500">$</span>
             <span className="animate-pulse">Waiting for test execution...</span>
           </div>
@@ -74,12 +76,12 @@ export function CLIPanel({ logs, testResults }: CLIPanelProps) {
                 <span
                   className={`${
                     log.startsWith("✅")
-                      ? "text-green-400"
+                      ? "text-green-500"
                       : log.startsWith("❌")
-                      ? "text-red-400"
-                      : log.startsWith("⏱️")
-                      ? "text-yellow-400"
-                      : "text-zinc-300"
+                        ? "text-red-500"
+                        : log.startsWith("⏱️")
+                          ? "text-yellow-500"
+                          : "text-foreground"
                   }`}
                 >
                   {log}
@@ -91,20 +93,26 @@ export function CLIPanel({ logs, testResults }: CLIPanelProps) {
 
         {/* Test Results */}
         {testResults && (
-          <div className="mt-4 pt-4 border-t border-[#2d333b]">
-            <div className="text-zinc-500 mb-2">--- Test Summary ---</div>
-            <pre className="whitespace-pre-wrap text-zinc-300">{testResults}</pre>
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="text-muted-foreground mb-2">
+              --- Test Summary ---
+            </div>
+            <pre className="whitespace-pre-wrap text-foreground">
+              {testResults}
+            </pre>
           </div>
         )}
       </div>
 
       {/* Footer */}
-      <div className="p-3 border-t border-[#1F1F1F] bg-[#0A0A0A]">
+      <div className="p-3 border-t border-border bg-card">
         <div className="flex items-center justify-between text-xs">
-          <span className="text-zinc-500">
+          <span className="text-muted-foreground">
             {logs.length} command{logs.length !== 1 ? "s" : ""} executed
           </span>
-          <span className="text-zinc-600 font-mono">sandbox://python3</span>
+          <span className="text-muted-foreground font-mono">
+            sandbox://python3
+          </span>
         </div>
       </div>
     </div>

@@ -37,17 +37,17 @@ export function AgentPanel({ agents }: AgentPanelProps) {
     agents?.filter((a) => a.status === "thinking").length ?? 0;
 
   return (
-    <Card className="h-full border-none rounded-none border-r border-[#1F1F1F] bg-[#050505] w-75 flex flex-col">
-      <CardHeader className="pb-4 pt-5 px-5 border-b border-[#1F1F1F]">
+    <Card className="h-full border-none rounded-none border-r border-border bg-background w-75 flex flex-col">
+      <CardHeader className="pb-4 pt-5 px-5 border-b border-border">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-zinc-100">
-            <LayoutGrid className="w-4 h-4 text-purple-400" />
+          <div className="flex items-center gap-2 text-foreground">
+            <LayoutGrid className="w-4 h-4 text-purple-500" />
             <CardTitle className="text-sm font-bold tracking-wider">
               ARCHONS
             </CardTitle>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-zinc-500 font-mono">
+            <span className="text-[10px] text-muted-foreground font-mono">
               {activeCount} ACTIVE
             </span>
             {activeCount > 0 && (
