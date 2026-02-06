@@ -22,6 +22,8 @@ from database import (
     get_db_conn, 
     update_task_status, 
     update_decision_signal,
+    update_rejection_feedback,
+    get_task_prompt,
     emit_event, 
     subscribers
 )
@@ -182,20 +184,72 @@ async def approve_code(task_id: str):
     })
     return {"status": "approved"}
 
+class RejectRequest(BaseModel):
+    feedback: Optional[str] = None
+
 @app.post("/api/task/{task_id}/reject")
-async def reject_code(task_id: str):
+async def reject_code(task_id: str, body: RejectRequest = None):
     # Set signal to REJECTED
     update_decision_signal(task_id, "REJECTED")
     
-    # If it was paused (waiting for approval), resume it
+    # Store feedback if provided
+    if body and body.feedback:
+        update_rejection_feedback(task_id, body.feedback)
+    
+    # If it was paused, resume it
     update_task_status(task_id, "running")
     
     emit_event(task_id, {
         "type": "human_approval",
         "approved": False,
-        "message": "Code rejected by user - regenerating",
+        "message": f"Code rejected by user{' with feedback' if body and body.feedback else ''}",
+        "feedback": body.feedback if body else None,
     })
     return {"status": "rejected"}
+
+class RegenerateRequest(BaseModel):
+    feedback: Optional[str] = None
+
+@app.post("/api/task/{task_id}/regenerate")
+async def regenerate_task(task_id: str, body: RegenerateRequest = None):
+    """Regenerate a task with the original prompt + optional feedback."""
+    # Get original prompt
+    original_prompt = get_task_prompt(task_id)
+    if not original_prompt:
+        raise HTTPException(status_code=404, detail="Original task not found or has no prompt")
+    
+    # Get model from original task
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT model FROM tasks WHERE task_id = ?", (task_id,))
+        row = cursor.fetchone()
+        model = row[0] if row else "ollama"
+    
+    # Build new prompt with feedback
+    new_prompt = original_prompt
+    if body and body.feedback:
+        new_prompt = f"""{original_prompt}
+
+---
+IMPORTANT USER FEEDBACK (address this as top priority):
+{body.feedback}
+---"""
+    
+    # Create new task
+    new_task_id = f"crew_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO tasks (task_id, status, model, created_at, decision_signal, prompt) VALUES (?, ?, ?, ?, ?, ?)",
+            (new_task_id, "pending", model, datetime.now().isoformat(), None, original_prompt)
+        )
+        conn.commit()
+    
+    subscribers[new_task_id] = []
+    threading.Thread(target=run_crew, args=(new_task_id, new_prompt, model), daemon=True).start()
+    
+    return {"task_id": new_task_id, "model": model}
 
 @app.post("/api/run-crew")
 async def run_crew_api(req: CrewRequest):
@@ -205,18 +259,10 @@ async def run_crew_api(req: CrewRequest):
     # Save initial task state
     with get_db_conn() as conn:
         cursor = conn.cursor()
-        # Create table if not exists (redundant if init_db runs but safe)
-        try:
-             cursor.execute(
-                "INSERT INTO tasks (task_id, status, model, user_id, project_id, created_at, decision_signal) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (task_id, "pending", model, req.user_id, req.project_id, datetime.now().isoformat(), None)
-            )
-        except Exception:
-             # Fallback
-             cursor.execute(
-                "INSERT INTO tasks (task_id, status, model, user_id, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (task_id, "pending", model, req.user_id, req.project_id, datetime.now().isoformat())
-            )
+        cursor.execute(
+            "INSERT INTO tasks (task_id, status, model, user_id, project_id, created_at, decision_signal, prompt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, "pending", model, req.user_id, req.project_id, datetime.now().isoformat(), None, req.prompt)
+        )
         conn.commit()
 
     subscribers[task_id] = []

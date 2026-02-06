@@ -7,6 +7,7 @@ import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
 import { PreviewPanel } from "@/components/workspace/PreviewPanel";
 import { CLIPanel } from "@/components/workspace/CLIPanel";
+import { RejectModal } from "@/components/workspace/RejectModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,6 +72,7 @@ export default function WorkspacePage() {
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
   const [sidePanel, setSidePanel] = useState<SidePanel>("preview");
+  const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -258,11 +260,21 @@ export default function WorkspacePage() {
     });
   };
 
-  const handleReject = async () => {
+  const handleReject = async (feedback: string) => {
     if (!taskId) return;
-    await fetch(`http://localhost:8000/api/task/${taskId}/reject`, {
+    
+    // Call regenerate endpoint which creates a new task with feedback
+    const response = await fetch(`http://localhost:8000/api/task/${taskId}/regenerate`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feedback }),
     });
+    
+    if (response.ok) {
+      const data = await response.json();
+      // Redirect to the new task
+      window.location.href = `/workspace?taskId=${data.task_id}`;
+    }
   };
 
   /* =========================
@@ -293,6 +305,7 @@ export default function WorkspacePage() {
   };
 
   return (
+    <>
     <div className="flex h-screen bg-background overflow-hidden">
       <div className="hidden md:block flex-none">
         <AgentPanel agents={agents} />
@@ -313,7 +326,7 @@ export default function WorkspacePage() {
           </div>
 
           <div className="flex items-center gap-2">
-            {taskStatus === "running" && (
+            {(taskStatus === "running" || taskStatus === "pending") && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -346,7 +359,7 @@ export default function WorkspacePage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={handleReject}
+              onClick={() => setIsRejectModalOpen(true)}
               disabled={!outputs.code}
               className="text-red-500 disabled:opacity-50"
             >
@@ -450,5 +463,14 @@ export default function WorkspacePage() {
         </div>
       </div>
     </div>
+    
+    {/* Reject Modal */}
+    <RejectModal
+      isOpen={isRejectModalOpen}
+      onClose={() => setIsRejectModalOpen(false)}
+      onSubmit={handleReject}
+    />
+    </>
   );
 }
+

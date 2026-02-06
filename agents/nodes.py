@@ -9,7 +9,7 @@ from typing import Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from agents.state import AgentState
-from database import emit_event, get_task_status, update_decision_signal
+from database import emit_event, get_task_status, update_decision_signal, clear_decision_signal, get_rejection_feedback, update_rejection_feedback
 import time
 from tools.executor import execute
 
@@ -439,6 +439,23 @@ def code_refiner_node(state: AgentState) -> AgentState:
         "message": f"[AGENT_START refiner]"
     })
     
+    # Get user rejection feedback if any
+    user_feedback = get_rejection_feedback(state["task_id"])
+    feedback_section = ""
+    if user_feedback:
+        feedback_section = f"""
+User Rejection Feedback:
+{user_feedback}
+
+IMPORTANT: The user has explicitly rejected the previous code. Address their feedback above as your top priority.
+"""
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"📝 User feedback received: {user_feedback[:100]}..."
+        })
+        # Clear feedback after reading
+        update_rejection_feedback(state["task_id"], None)
+    
     prompt = f"""You are a Code Refiner specializing in fixing bugs and applying improvements.
 
 Original Code:
@@ -449,12 +466,13 @@ Review Feedback:
 
 CLI Test Results (if any):
 {state.get('test_results', 'No test results available.')}
-
+{feedback_section}
 Your task:
 1. Read the original code
 2. Read the review feedback carefully
 3. Fix bugs identified in the Review Feedback AND any errors shown in the CLI Test Results.
-4. Output ONLY the corrected code in a single code block
+4. If user feedback is provided, address it as the TOP priority.
+5. Output ONLY the corrected code in a single code block
 
 STRICT OUTPUT RULE:
 - Output ONLY a single fenced code block

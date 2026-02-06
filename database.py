@@ -2,7 +2,7 @@ import sqlite3
 import os
 import json
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import asyncio
 
 # =========================
@@ -34,7 +34,9 @@ def init_db():
                 user_id TEXT,
                 project_id TEXT,
                 created_at TEXT,
-                decision_signal TEXT  -- New column to store approved/rejected signal
+                decision_signal TEXT,
+                rejection_feedback TEXT,
+                prompt TEXT
             )
         ''')
         # Table for every log/event produced by the agents
@@ -49,12 +51,12 @@ def init_db():
             )
         ''')
         
-        # Check if decision_signal column exists (migration for existing db)
-        try:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN decision_signal TEXT")
-        except sqlite3.OperationalError:
-            # Column likely already exists
-            pass
+        # Migration: Add columns if they don't exist
+        for column in ["decision_signal", "rejection_feedback", "prompt"]:
+            try:
+                cursor.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             
         conn.commit()
 
@@ -65,21 +67,40 @@ def update_task_status(task_id: str, status: str):
         cursor.execute("UPDATE tasks SET status = ? WHERE task_id = ?", (status, task_id))
         conn.commit()
 
-def update_decision_signal(task_id: str, signal: str):
-    """Updates the decision signal (APPROVED/REJECTED) in the DB."""
+def update_decision_signal(task_id: str, signal: Optional[str]):
+    """Updates the decision signal (APPROVED/REJECTED/None) in the DB."""
     with get_db_conn() as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE tasks SET decision_signal = ? WHERE task_id = ?", (signal, task_id))
         conn.commit()
 
-def get_task_status(task_id: str):
-    """Get content of status and decision_signal."""
+def clear_decision_signal(task_id: str):
+    """Clears the decision signal after it has been consumed."""
+    update_decision_signal(task_id, None)
+
+def update_rejection_feedback(task_id: str, feedback: Optional[str]):
+    """Stores rejection feedback from the user."""
     with get_db_conn() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT status, decision_signal FROM tasks WHERE task_id = ?", (task_id,))
+        cursor.execute("UPDATE tasks SET rejection_feedback = ? WHERE task_id = ?", (feedback, task_id))
+        conn.commit()
+
+def get_rejection_feedback(task_id: str) -> Optional[str]:
+    """Gets rejection feedback if any."""
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT rejection_feedback FROM tasks WHERE task_id = ?", (task_id,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
+    """Get task status, decision_signal, and rejection_feedback."""
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT status, decision_signal, rejection_feedback FROM tasks WHERE task_id = ?", (task_id,))
         row = cursor.fetchone()
         if row:
-            return {"status": row[0], "decision_signal": row[1]}
+            return {"status": row[0], "decision_signal": row[1], "rejection_feedback": row[2]}
         return None
 
 def emit_event(task_id: str, event: Dict[str, Any]):
@@ -100,3 +121,11 @@ def emit_event(task_id: str, event: Dict[str, Any]):
     if task_id in subscribers:
         for q in subscribers[task_id]:
             q.put_nowait(event)
+
+def get_task_prompt(task_id: str) -> Optional[str]:
+    """Gets the original prompt for a task."""
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT prompt FROM tasks WHERE task_id = ?", (task_id,))
+        row = cursor.fetchone()
+        return row[0] if row else None
