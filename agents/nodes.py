@@ -9,7 +9,8 @@ from typing import Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from agents.state import AgentState
-from app import emit_event
+from database import emit_event, get_task_status, update_decision_signal
+import time
 from tools.executor import execute
 
 # ===========================================
@@ -32,7 +33,32 @@ def get_ollama_llm():
             base_url="http://localhost:11434",
             temperature=0.7
         )
+
     return _ollama_llm
+
+
+def check_interrupts(task_id: str):
+    """
+    Checks DB for pause status and waits if paused.
+    To be called at the start of every node.
+    """
+    while True:
+        state = get_task_status(task_id)
+        if not state:
+            break
+        
+        status = state.get("status")
+        if status == "paused":
+            # Just wait
+            time.sleep(1)
+            continue
+        
+        if status == "failed" or status == "completed":
+            # Stop processing
+            raise Exception(f"Task stopped with status: {status}")
+            
+        break
+
 
 
 def get_groq_llm():
@@ -120,6 +146,7 @@ def clean_code_output(text: str) -> str:
 # ==========================================
 def code_generator_node(state: AgentState) -> AgentState:
     """Generate initial code based on requirements."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -209,6 +236,7 @@ FORBIDDEN:
 # ==========================================
 def code_reviewer_node(state: AgentState) -> AgentState:
     """Review generated code for issues."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -293,6 +321,7 @@ DO NOT add extra sections.
 # ==========================================
 def decision_maker_node(state: AgentState) -> AgentState:
     """Decide if code needs refinement."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -321,10 +350,34 @@ NO punctuation. NO explanation. NO additional text.
     ]
     
     try:
-        # Use local model for decision (simple task)
-        llm = get_llm(for_heavy_task=False)
-        response = llm.invoke(messages)
-        decision = response.content.strip().upper()
+        # 1. Check for Manual Override Signal (Approve/Reject from UI)
+        db_state = get_task_status(state["task_id"])
+        decision_signal = db_state.get("decision_signal") if db_state else None
+        
+        if decision_signal == "APPROVED":
+            decision = "NO"
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": "🚦 Human Signal: APPROVED (Skipping Refinement)"
+            })
+            # Clear signal
+            update_decision_signal(state["task_id"], None)
+            
+        elif decision_signal == "REJECTED":
+            decision = "YES"
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": "🚦 Human Signal: REJECTED (Forcing Refinement)"
+            })
+            # Clear signal
+            update_decision_signal(state["task_id"], None)
+            
+        else:
+            # 2. Automated Decision (LLM)
+            # Use local model for decision (simple task)
+            llm = get_llm(for_heavy_task=False)
+            response = llm.invoke(messages)
+            decision = response.content.strip().upper()
         
         # Ensure it's YES or NO
         if "YES" in decision:
@@ -374,6 +427,7 @@ NO punctuation. NO explanation. NO additional text.
 # ==========================================
 def code_refiner_node(state: AgentState) -> AgentState:
     """Refine code based on review feedback."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -481,6 +535,7 @@ STRICT OUTPUT RULE:
 # ==========================================
 def doc_writer_node(state: AgentState) -> AgentState:
     """Generate professional documentation."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -568,6 +623,7 @@ def cli_tester_node(state: AgentState) -> AgentState:
     Test code in CLI and capture results.
     This is the unique patent feature for automated testing/debugging.
     """
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",

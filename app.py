@@ -14,8 +14,17 @@ import json
 import asyncio
 import os
 from datetime import datetime
-import sqlite3
 from dotenv import load_dotenv
+
+# Import database layer
+from database import (
+    init_db, 
+    get_db_conn, 
+    update_task_status, 
+    update_decision_signal,
+    emit_event, 
+    subscribers
+)
 
 load_dotenv()
 
@@ -30,82 +39,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# SQLITE DATABASE LAYER
-# =========================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "crew_tasks.db")
-
-def get_db_conn():
-    """Returns a connection to the SQLite database."""
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-def init_db():
-    """Creates tables if they don't exist."""
-    with get_db_conn() as conn:
-        cursor = conn.cursor()
-        # Primary table for overall task status
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id TEXT PRIMARY KEY,
-                status TEXT,
-                model TEXT,
-                user_id TEXT,
-                project_id TEXT,
-                created_at TEXT
-            )
-        ''')
-        # Table for every log/event produced by the agents
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT,
-                type TEXT,
-                data TEXT,
-                timestamp TEXT,
-                FOREIGN KEY (task_id) REFERENCES tasks (task_id)
-            )
-        ''')
-        conn.commit()
-
 @app.on_event("startup")
 def startup_event():
     init_db()
-
-# =========================
-# REAL-TIME STATE (RAM ONLY)
-# =========================
-# Subscribers are live browser connections. They cannot be saved to a DB.
-subscribers: Dict[str, List[asyncio.Queue]] = {}
-
-# =========================
-# CORE LOGIC HELPERS
-# =========================
-def update_task_status(task_id: str, status: str):
-    """Updates the status in the DB."""
-    with get_db_conn() as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE tasks SET status = ? WHERE task_id = ?", (status, task_id))
-        conn.commit()
-
-def emit_event(task_id: str, event: Dict[str, Any]):
-    """Saves event to DB and broadcasts to any live UI listeners."""
-    timestamp = datetime.now().isoformat()
-    event["timestamp"] = timestamp
-    
-    # 1. Save to SQLite
-    with get_db_conn() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO events (task_id, type, data, timestamp) VALUES (?, ?, ?, ?)",
-            (task_id, event.get("type"), json.dumps(event), timestamp)
-        )
-        conn.commit()
-
-    # 2. Push to active website users (Real-time)
-    if task_id in subscribers:
-        for q in subscribers[task_id]:
-            q.put_nowait(event)
 
 # =========================
 # LOGGER CLASS
@@ -136,6 +72,7 @@ class QueueLogger:
 # BACKGROUND WORKER
 # =========================
 def run_crew(task_id: str, prompt: str, model: str):
+    # Lazy import to avoid circular dependency if main imports app
     from main import run_software_crew
     old_stdout = sys.stdout
     sys.stdout = QueueLogger(task_id)
@@ -232,6 +169,12 @@ async def resume_task(task_id: str):
 # --- Updated Human-in-the-Loop Routes ---
 @app.post("/api/task/{task_id}/approve")
 async def approve_code(task_id: str):
+    # Set signal to APPROVED
+    update_decision_signal(task_id, "APPROVED")
+    
+    # If it was paused (waiting for approval), resume it
+    update_task_status(task_id, "running")
+    
     emit_event(task_id, {
         "type": "human_approval",
         "approved": True,
@@ -241,6 +184,12 @@ async def approve_code(task_id: str):
 
 @app.post("/api/task/{task_id}/reject")
 async def reject_code(task_id: str):
+    # Set signal to REJECTED
+    update_decision_signal(task_id, "REJECTED")
+    
+    # If it was paused (waiting for approval), resume it
+    update_task_status(task_id, "running")
+    
     emit_event(task_id, {
         "type": "human_approval",
         "approved": False,
@@ -256,10 +205,18 @@ async def run_crew_api(req: CrewRequest):
     # Save initial task state
     with get_db_conn() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO tasks (task_id, status, model, user_id, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (task_id, "pending", model, req.user_id, req.project_id, datetime.now().isoformat())
-        )
+        # Create table if not exists (redundant if init_db runs but safe)
+        try:
+             cursor.execute(
+                "INSERT INTO tasks (task_id, status, model, user_id, project_id, created_at, decision_signal) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, "pending", model, req.user_id, req.project_id, datetime.now().isoformat(), None)
+            )
+        except Exception:
+             # Fallback
+             cursor.execute(
+                "INSERT INTO tasks (task_id, status, model, user_id, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (task_id, "pending", model, req.user_id, req.project_id, datetime.now().isoformat())
+            )
         conn.commit()
 
     subscribers[task_id] = []

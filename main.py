@@ -15,7 +15,7 @@ from agents.nodes import (
     should_refine_after_test,
     set_model_config
 )
-from app import emit_event
+from database import emit_event
 
 load_dotenv()
 
