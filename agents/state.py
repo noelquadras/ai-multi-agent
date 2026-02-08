@@ -17,7 +17,8 @@ class AgentState(TypedDict):
     # Input
     requirements: str
     task_id: str
-    model: str  # "ollama" or "groq"
+    model: str  # "ollama" or "groq" (default/fallback)
+    agent_models: Optional[dict[str, str]]  # Specific models for each agent
     
     # Agent Outputs
     generated_code: str

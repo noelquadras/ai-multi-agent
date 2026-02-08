@@ -75,7 +75,7 @@ class QueueLogger:
 # =========================
 # BACKGROUND WORKER
 # =========================
-def run_crew(task_id: str, prompt: str, model: str):
+def run_crew(task_id: str, prompt: str, model: str, agent_models: Optional[Dict[str, str]] = None):
     # Lazy import to avoid circular dependency if main imports app
     from main import run_software_crew
     old_stdout = sys.stdout
@@ -86,7 +86,7 @@ def run_crew(task_id: str, prompt: str, model: str):
         emit_event(task_id, {"type": "log", "message": f"Workflow started with {model}"})
         
         # This calls your main logic in main.py
-        run_software_crew(prompt, task_id, model=model)
+        run_software_crew(prompt, task_id, model=model, agent_models=agent_models)
         
         update_task_status(task_id, "completed")
         emit_event(task_id, {"type": "task_completed"})
@@ -102,6 +102,7 @@ def run_crew(task_id: str, prompt: str, model: str):
 class CrewRequest(BaseModel):
     prompt: str
     model: Optional[str] = "ollama"
+    agent_models: Optional[Dict[str, str]] = None
     user_id: Optional[str] = None
     project_id: Optional[str] = None
 
@@ -276,7 +277,7 @@ async def run_crew_api(req: CrewRequest):
         conn.commit()
 
     subscribers[task_id] = []
-    threading.Thread(target=run_crew, args=(task_id, req.prompt, model), daemon=True).start()
+    threading.Thread(target=run_crew, args=(task_id, req.prompt, model, req.agent_models), daemon=True).start()
     return {"task_id": task_id, "model": model}
 
 @app.get("/api/history")

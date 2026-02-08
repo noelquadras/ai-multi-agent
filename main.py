@@ -15,6 +15,7 @@ from agents.nodes import (
     should_refine_after_test,
     set_model_config
 )
+from typing import Dict, Optional
 from database import emit_event
 
 load_dotenv()
@@ -102,7 +103,7 @@ def create_agent_graph(include_cli_test: bool = True):
     return workflow.compile()
 
 
-def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
+def run_software_crew(requirements: str, task_id: str, model: str = "ollama", agent_models: Optional[Dict[str, str]] = None):
     """
     Execute the LangGraph agent workflow.
     
@@ -110,6 +111,7 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
         requirements: User's code requirements
         task_id: Unique task identifier
         model: LLM model to use ("ollama" or "groq")
+        agent_models: Optional dictionary of specific models for each agent
         
     Returns:
         Final state with all agent outputs
@@ -125,6 +127,7 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
         "requirements": requirements,
         "task_id": task_id,
         "model": model,
+        "agent_models": agent_models or {},
         "generated_code": "",
         "review_report": "",
         "decision": "",

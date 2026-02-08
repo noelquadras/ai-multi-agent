@@ -91,14 +91,33 @@ def set_model_config(model: str, groq_api_key: str = ""):
         get_groq_llm()  # Initialize immediately
 
 
-def get_llm(for_heavy_task: bool = False):
+def get_llm(for_heavy_task: bool = False, override_model: str = ""):
     """
     Get the appropriate LLM based on configuration and task type.
     
     Args:
         for_heavy_task: If True, use the heavy-duty model (Groq for code gen).
                        If False, can use lighter model for simple tasks.
+        override_model: If provided, specific model ID to use.
     """
+    # 1. Use override model if provided
+    if override_model:
+        if "groq" in override_model.lower() or "llama" in override_model.lower():
+            # It's likely a cloud/groq model
+             if _groq_api_key:
+                from langchain_groq import ChatGroq
+                # Use the specific model name if possible, or fallback to default groq
+                model_name = "llama-3.3-70b-versatile"
+                return ChatGroq(model=model_name, api_key=_groq_api_key, temperature=0.7)
+        
+        # Assume it's a local Ollama model
+        return ChatOllama(
+            model=override_model,
+            base_url="http://localhost:11434",
+            temperature=0.7
+        )
+
+    # 2. Fallback to global default logic
     if _current_model == "groq" and for_heavy_task:
         return get_groq_llm()
     return get_ollama_llm()
@@ -193,7 +212,7 @@ FORBIDDEN:
     
     try:
         # Use heavy-duty model for code generation
-        llm = get_llm(for_heavy_task=True)
+        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("coder", ""))
         response = llm.invoke(messages)
         code = response.content
         
@@ -285,7 +304,7 @@ DO NOT add extra sections.
     
     try:
         # Use local model for review (cheaper)
-        llm = get_llm(for_heavy_task=False)
+        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("reviewer", ""))
         response = llm.invoke(messages)
         review = response.content
         
@@ -382,7 +401,7 @@ NO punctuation. NO explanation. NO additional text.
         else:
             # 2. Automated Decision (LLM)
             # Use local model for decision (simple task)
-            llm = get_llm(for_heavy_task=False)
+            llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("decision", ""))
             response = llm.invoke(messages)
             decision = response.content.strip().upper()
         
@@ -495,7 +514,7 @@ STRICT OUTPUT RULE:
     
     try:
         # Use heavy-duty model for refining
-        llm = get_llm(for_heavy_task=True)
+        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("refiner", ""))
         response = llm.invoke(messages)
         refined_code = response.content
         
@@ -601,7 +620,7 @@ Output MUST be clean, well-formatted markdown suitable for a README.
     
     try:
         # Use local model for documentation (cheaper)
-        llm = get_llm(for_heavy_task=False)
+        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("doc_writer", ""))
         response = llm.invoke(messages)
         docs = response.content
         

@@ -31,18 +31,11 @@ interface CrewResponse {
   model: string;
 }
 
-interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-  icon: typeof Cpu;
-  speed: string;
-  cost: string;
-}
-
 /* =========================
    COMPONENT
 ========================= */
+
+import { ModelSelector, AgentModels, ModelOption } from "@/components/ModelSelector";
 
 export default function HomePage() {
   const { toggleTheme } = useTheme();
@@ -55,6 +48,17 @@ export default function HomePage() {
   } = useExecution();
   const [localPrompt, setLocalPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState<string>("ollama");
+  
+  // New state for per-agent configuration
+  const [agentModels, setAgentModels] = useState<AgentModels>({
+    coder: "default",
+    reviewer: "default",
+    decision: "default",
+    refiner: "default",
+    doc_writer: "default",
+    tester: "default",
+  });
+
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(
     "checking",
   );
@@ -73,6 +77,7 @@ export default function HomePage() {
           icon: m.type === "cloud" ? Cloud : Cpu,
           speed: m.speed,
           cost: m.cost,
+          type: m.type, // Ensure type is passed
         }));
         setModels(mappedModels);
         // Select first model by default if none selected
@@ -100,6 +105,15 @@ export default function HomePage() {
   const startCrew = async () => {
     if (!localPrompt.trim()) return;
 
+    // Prepare agent_models dictionary, filtering out "default" values
+    // If a model is set to "default", we don't send it, so backend uses the main model
+    const specificAgentModels: Record<string, string> = {};
+    Object.entries(agentModels).forEach(([agent, model]) => {
+      if (model !== "default") {
+        specificAgentModels[agent] = model;
+      }
+    });
+
     try {
       const res = await fetch("http://localhost:8000/api/run-crew", {
         method: "POST",
@@ -107,6 +121,7 @@ export default function HomePage() {
         body: JSON.stringify({
           prompt: localPrompt,
           model: selectedModel,
+          agent_models: Object.keys(specificAgentModels).length > 0 ? specificAgentModels : undefined,
           user_id: session?.user?.id,
           project_id: "default",
         }),
@@ -124,6 +139,13 @@ export default function HomePage() {
     } catch (error) {
       console.error("Network error:", error);
     }
+  };
+
+  const handleAgentModelChange = (agent: keyof AgentModels, modelId: string) => {
+    setAgentModels((prev) => ({
+      ...prev,
+      [agent]: modelId,
+    }));
   };
 
   /* =========================
@@ -218,56 +240,14 @@ export default function HomePage() {
 
           {/* Model Selection */}
           <div className="mt-4 pt-4 border-t border-border">
-            <p className="text-xs text-muted-foreground mb-3">
-              Select LLM Model
-            </p>
-
-            <div className="flex gap-3">
-              {models.map((model) => (
-                <button
-                  key={model.id}
-                  onClick={() => setSelectedModel(model.id)}
-                  disabled={isRunning}
-                  className={`flex-1 p-3 rounded-lg border transition-all ${
-                    selectedModel === model.id
-                      ? "border-purple-500 bg-purple-500/10"
-                      : "border-border bg-muted hover:border-ring"
-                  } ${isRunning ? "opacity-50 cursor-not-allowed" : ""}`}
-                >
-                  <div className="flex items-center gap-2 mb-2">
-                    <model.icon
-                      className={`w-4 h-4 ${
-                        selectedModel === model.id
-                          ? "text-primary"
-                          : "text-muted-foreground"
-                      }`}
-                    />
-                    <span
-                      className={`text-sm font-medium ${
-                        selectedModel === model.id
-                          ? "text-foreground"
-                          : "text-muted-foreground"
-                      }`}
-                    >
-                      {model.name}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-muted-foreground text-left mb-2">
-                    {model.description}
-                  </p>
-
-                  <div className="flex gap-2">
-                    <Badge variant="outline" className="text-[10px]">
-                      {model.speed}
-                    </Badge>
-                    <Badge variant="outline" className="text-[10px]">
-                      {model.cost}
-                    </Badge>
-                  </div>
-                </button>
-              ))}
-            </div>
+             <ModelSelector 
+                models={models}
+                selectedModel={selectedModel}
+                onSelectModel={setSelectedModel}
+                agentModels={agentModels}
+                onAgentModelChange={handleAgentModelChange}
+                disabled={isRunning}
+             />
           </div>
 
           <div className="flex justify-end mt-4">
@@ -291,46 +271,6 @@ export default function HomePage() {
               )}
             </Button>
           </div>
-        </div>
-
-        {/* Features */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-3xl">
-          {[
-            {
-              icon: Bot,
-              title: "6 AI Agents",
-              desc: "Coder, Reviewer, Decision, Refiner, Tester, and Doc Writer",
-              color: "text-blue-500",
-              bg: "bg-blue-500/20",
-            },
-            {
-              icon: Cpu,
-              title: "CLI Testing",
-              desc: "Automated sandboxed code execution and testing",
-              color: "text-green-500",
-              bg: "bg-green-500/20",
-            },
-            {
-              icon: Cloud,
-              title: "Hybrid LLM",
-              desc: "Local Ollama or cloud Groq models",
-              color: "text-purple-500",
-              bg: "bg-purple-500/20",
-            },
-          ].map((f) => (
-            <div
-              key={f.title}
-              className="p-4 bg-card border border-border rounded-lg"
-            >
-              <div
-                className={`w-8 h-8 ${f.bg} rounded-lg flex items-center justify-center mb-3`}
-              >
-                <f.icon className={`w-4 h-4 ${f.color}`} />
-              </div>
-              <h3 className="font-medium text-sm mb-1">{f.title}</h3>
-              <p className="text-xs text-muted-foreground">{f.desc}</p>
-            </div>
-          ))}
         </div>
       </div>
 
