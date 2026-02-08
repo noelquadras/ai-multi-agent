@@ -19,6 +19,8 @@ import {
 import { useExecution } from "@/app/context/ExecutionContext";
 import { UserMenu } from "@/components/auth/UserMenu";
 import { useTheme } from "@/hooks/useTheme";
+import { HistorySidebar } from "@/components/HistorySidebar";
+import { History } from "lucide-react";
 
 /* =========================
    TYPES
@@ -56,6 +58,7 @@ export default function HomePage() {
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(
     "checking",
   );
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   const models: ModelOption[] = [
     {
@@ -101,6 +104,7 @@ export default function HomePage() {
           prompt: localPrompt,
           model: selectedModel,
           user_id: session?.user?.id,
+          project_id: "default",
         }),
       });
 
@@ -134,6 +138,16 @@ export default function HomePage() {
         </div>
 
         <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsHistoryOpen(true)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <History className="w-4 h-4 mr-2" />
+            History
+          </Button>
+
           {sessionStatus === "authenticated" ? (
             <UserMenu />
           ) : sessionStatus === "unauthenticated" ? (
@@ -147,17 +161,17 @@ export default function HomePage() {
               Sign In
             </Button>
           ) : null}
-        </div>
 
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleTheme}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <Sun className="h-4 w-4 dark:hidden" />
-          <Moon className="h-4 w-4 hidden dark:block" />
-        </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleTheme}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Sun className="h-4 w-4 dark:hidden" />
+            <Moon className="h-4 w-4 hidden dark:block" />
+          </Button>
+        </div>
       </div>
 
       {/* Main Content */}
@@ -315,6 +329,11 @@ export default function HomePage() {
           ))}
         </div>
       </div>
+
+      <HistorySidebar
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+      />
     </main>
   );
 }

@@ -202,6 +202,13 @@ FORBIDDEN:
             "message": f"Generated {len(code)} characters of code"
         })
         
+        # EMIT GENERATED CODE FOR FRONTEND PREVIEW
+        emit_event(state["task_id"], {
+            "type": "code_output",
+            "agent": "coder",
+            "code": clean_code_output(code)
+        })
+        
         emit_event(state["task_id"], {
             "type": "agent_end",
             "agent": "coder"

@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { AgentPanel } from "@/components/workspace/AgentPanel";
 import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
-import { PreviewPanel } from "@/components/workspace/PreviewPanel";
 import { CLIPanel } from "@/components/workspace/CLIPanel";
 import { RejectModal } from "@/components/workspace/RejectModal";
 import { Badge } from "@/components/ui/badge";
@@ -17,9 +16,10 @@ import {
   Check,
   X,
   Terminal,
-  Eye,
   FileText,
+  History,
 } from "lucide-react";
+import { HistorySidebar } from "@/components/HistorySidebar";
 
 /* =========================
    TYPES
@@ -48,7 +48,7 @@ interface TaskOutputs {
   testResults: string;
 }
 
-type SidePanel = "preview" | "cli" | "docs";
+type SidePanel = "cli" | "docs";
 
 /* =========================
    COMPONENT
@@ -71,8 +71,9 @@ export default function WorkspacePage() {
     testResults: "",
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
-  const [sidePanel, setSidePanel] = useState<SidePanel>("preview");
+  const [sidePanel, setSidePanel] = useState<SidePanel>("cli");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -369,6 +370,14 @@ export default function WorkspacePage() {
             <Button
               variant="ghost"
               size="icon"
+              onClick={() => setIsHistoryOpen(true)}
+              className="text-muted-foreground mr-1"
+            >
+              <History className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => taskId && refreshStatus(taskId)}
               className="text-muted-foreground"
             >
@@ -384,16 +393,6 @@ export default function WorkspacePage() {
 
           <div className="hidden xl:flex flex-col border-l border-border">
             <div className="flex border-b border-border bg-card">
-              <button
-                onClick={() => setSidePanel("preview")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${
-                  sidePanel === "preview"
-                    ? "bg-muted text-foreground border-b-2 border-purple-500"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Eye className="w-4 h-4" /> Preview
-              </button>
               <button
                 onClick={() => setSidePanel("cli")}
                 className={`flex items-center gap-2 px-4 py-2 text-sm ${
@@ -420,19 +419,6 @@ export default function WorkspacePage() {
             </div>
 
             <div className="flex-1 overflow-hidden">
-              {sidePanel === "preview" && (
-                <PreviewPanel
-                  taskStatus={{
-                    status: taskStatus,
-                    result: {
-                      refined_code: outputs.code,
-                      generated_code: outputs.code,
-                      documentation: outputs.documentation,
-                      review_report: outputs.review,
-                    },
-                  }}
-                />
-              )}
               {sidePanel === "cli" && (
                 <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
               )}
@@ -464,6 +450,11 @@ export default function WorkspacePage() {
       </div>
     </div>
     
+    <HistorySidebar
+      isOpen={isHistoryOpen}
+      onClose={() => setIsHistoryOpen(false)}
+    />
+
     {/* Reject Modal */}
     <RejectModal
       isOpen={isRejectModalOpen}

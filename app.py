@@ -271,7 +271,7 @@ async def run_crew_api(req: CrewRequest):
 
 @app.get("/api/history")
 async def get_all_history():
-    """BONUS: Returns all past tasks for a 'History' sidebar."""
+    """Returns all past tasks for a 'History' sidebar."""
     with get_db_conn() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
