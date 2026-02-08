@@ -60,24 +60,28 @@ export default function HomePage() {
   );
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
-  const models: ModelOption[] = [
-    {
-      id: "ollama",
-      name: "Local (Ollama)",
-      description: "Mistral 7B running locally",
-      icon: Cpu,
-      speed: "Medium",
-      cost: "Free",
-    },
-    {
-      id: "groq",
-      name: "Cloud (Groq)",
-      description: "Llama 3.3 70B via Groq API",
-      icon: Cloud,
-      speed: "Fast",
-      cost: "Free Tier",
-    },
-  ];
+  const [models, setModels] = useState<ModelOption[]>([]);
+
+  useEffect(() => {
+    fetch("http://localhost:8000/api/models")
+      .then((res) => res.json())
+      .then((data) => {
+        const mappedModels = data.models.map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          description: m.description || "AI Model",
+          icon: m.type === "cloud" ? Cloud : Cpu,
+          speed: m.speed,
+          cost: m.cost,
+        }));
+        setModels(mappedModels);
+        // Select first model by default if none selected
+        if (mappedModels.length > 0 && !selectedModel) {
+            setSelectedModel(mappedModels[0].id);
+        }
+      })
+      .catch((err) => console.error("Failed to fetch models:", err));
+  }, []);
 
   /* =========================
      API HEALTH

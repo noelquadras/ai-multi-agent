@@ -15,6 +15,7 @@ import asyncio
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+import httpx
 
 # Import database layer
 from database import (
@@ -25,7 +26,8 @@ from database import (
     update_rejection_feedback,
     get_task_prompt,
     emit_event, 
-    subscribers
+    subscribers,
+    soft_delete_task
 )
 
 load_dotenv()
@@ -112,6 +114,14 @@ async def health_check():
         return {"status": "ok", "version": "3.1.0", "database": "connected"}
     except Exception as e:
         return {"status": "error", "database": str(e)}
+
+@app.delete("/api/task/{task_id}")
+async def delete_task(task_id: str):
+    """Soft deletes a task (moves to archive)."""
+    success = soft_delete_task(task_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "deleted", "task_id": task_id}
 
 
 @app.get("/api/task/{task_id}")
@@ -280,9 +290,43 @@ async def get_all_history():
 
 @app.get("/api/models")
 async def get_available_models():
-    with open("models.json", "r") as f:
-        models = json.load(f)
-    return {"models": models}
+    # 1. Fetch local Ollama models
+    local_models = []
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get("http://localhost:11434/api/tags", timeout=2.0)
+            if response.status_code == 200:
+                data = response.json()
+                # Transform to our model format
+                for model in data.get("models", []):
+                    model_name = model["name"]
+                    # Clean up name if it has :latest
+                    display_name = model_name.split(":")[0]
+                    local_models.append({
+                        "id": model_name,
+                        "name": f"{display_name} (Local)",
+                        "speed": "medium",
+                        "cost": "free",
+                        "description": f"Local Ollama model: {model_name}",
+                        "type": "local"
+                    })
+    except Exception as e:
+        print(f"Failed to fetch Ollama models: {e}")
+
+    # 2. Load static/cloud models
+    try:
+        with open("models.json", "r") as f:
+            static_models = json.load(f)
+            # Add type field to static models if missing
+            for m in static_models:
+                if "type" not in m:
+                    m["type"] = "cloud" if "Cloud" in m["name"] else "local"
+    except Exception:
+        static_models = []
+
+    # 3. Combine (local first, then static)
+    # Deduplicate by ID if needed, but usually local and static won't clash if named differently
+    return {"models": local_models + static_models}
 
 if __name__ == "__main__":
     import uvicorn

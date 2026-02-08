@@ -51,6 +51,34 @@ def init_db():
             )
         ''')
         
+        # Table for deleted tasks
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS deleted_tasks (
+                task_id TEXT PRIMARY KEY,
+                status TEXT,
+                model TEXT,
+                user_id TEXT,
+                project_id TEXT,
+                created_at TEXT,
+                decision_signal TEXT,
+                rejection_feedback TEXT,
+                prompt TEXT,
+                deleted_at TEXT
+            )
+        ''')
+
+        # Table for deleted events
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS deleted_events (
+                id INTEGER PRIMARY KEY,
+                task_id TEXT,
+                type TEXT,
+                data TEXT,
+                timestamp TEXT,
+                deleted_at TEXT
+            )
+        ''')
+
         # Migration: Add columns if they don't exist
         for column in ["decision_signal", "rejection_feedback", "prompt"]:
             try:
@@ -59,6 +87,49 @@ def init_db():
                 pass  # Column already exists
             
         conn.commit()
+
+def soft_delete_task(task_id: str):
+    """Moves task and its events to deleted tables and removes from active tables."""
+    deleted_at = datetime.now().isoformat()
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        
+        # 1. Archive Task
+        cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
+        task_row = cursor.fetchone()
+        if not task_row:
+             # Task might already be deleted or not found
+            return False
+
+        # Get column names to construct INSERT
+        col_names = [description[0] for description in cursor.description]
+        placeholders = ", ".join(["?"] * len(col_names))
+        columns = ", ".join(col_names)
+        
+        # Add deleted_at
+        insert_sql = f"INSERT INTO deleted_tasks ({columns}, deleted_at) VALUES ({placeholders}, ?)"
+        cursor.execute(insert_sql, (*task_row, deleted_at))
+
+        # 2. Archive Events
+        cursor.execute("SELECT * FROM events WHERE task_id = ?", (task_id,))
+        events_rows = cursor.fetchall()
+        
+        if events_rows:
+            event_col_names = [description[0] for description in cursor.description]
+            event_placeholders = ", ".join(["?"] * len(event_col_names))
+            event_columns = ", ".join(event_col_names)
+            
+            event_insert_sql = f"INSERT INTO deleted_events ({event_columns}, deleted_at) VALUES ({event_placeholders}, ?)"
+            # Execute many for events
+            events_data = [(*row, deleted_at) for row in events_rows]
+            cursor.executemany(event_insert_sql, events_data)
+
+        # 3. Delete from active tables
+        cursor.execute("DELETE FROM events WHERE task_id = ?", (task_id,))
+        cursor.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+        
+        conn.commit()
+    return True
 
 def update_task_status(task_id: str, status: str):
     """Updates the status in the DB."""

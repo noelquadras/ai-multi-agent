@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { History, ChevronRight, Clock, Loader2, X } from "lucide-react";
+import { History, ChevronRight, Clock, Loader2, X, Trash2 } from "lucide-react";
 
 interface TaskHistoryItem {
   task_id: string;
@@ -41,6 +41,24 @@ export function HistorySidebar({ isOpen, onClose }: HistorySidebarProps) {
         });
     }
   }, [isOpen]);
+
+  const handleDelete = async (e: React.MouseEvent, taskId: string) => {
+    e.stopPropagation();
+    if (!confirm("Are you sure you want to delete this task?")) return;
+
+    try {
+      const res = await fetch(`http://localhost:8000/api/task/${taskId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setHistory((prev) => prev.filter((item) => item.task_id !== taskId));
+      } else {
+        console.error("Failed to delete task");
+      }
+    } catch (error) {
+      console.error("Error deleting task:", error);
+    }
+  };
 
   const getStatusColor = (status: TaskHistoryItem["status"]) => {
     switch (status) {
@@ -87,13 +105,13 @@ export function HistorySidebar({ isOpen, onClose }: HistorySidebarProps) {
                 </div>
               ) : (
                 history.map((item) => (
-                  <button
+                  <div
                     key={item.task_id}
                     onClick={() => {
                       router.push(`/workspace?taskId=${item.task_id}`);
                       onClose();
                     }}
-                    className="w-full flex flex-col gap-2 p-3 rounded-lg border border-border bg-card hover:bg-muted/50 transition-colors text-left group"
+                    className="w-full flex flex-col gap-2 p-3 rounded-lg border border-border bg-card hover:bg-muted/50 transition-colors text-left group cursor-pointer relative"
                   >
                     <div className="flex items-center justify-between w-full">
                       <Badge
@@ -104,13 +122,23 @@ export function HistorySidebar({ isOpen, onClose }: HistorySidebarProps) {
                       >
                         {item.status}
                       </Badge>
-                      <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {new Date(item.created_at).toLocaleDateString()}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {new Date(item.created_at).toLocaleDateString()}
+                        </span>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+                            onClick={(e) => handleDelete(e, item.task_id)}
+                        >
+                             <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
                     </div>
 
-                    <p className="text-sm font-medium line-clamp-2 leading-snug">
+                    <p className="text-sm font-medium line-clamp-2 leading-snug pr-2">
                       {item.prompt || "No prompt description"}
                     </p>
 
@@ -120,7 +148,7 @@ export function HistorySidebar({ isOpen, onClose }: HistorySidebarProps) {
                       </span>
                       <ChevronRight className="w-3 h-3 text-muted-foreground group-hover:text-purple-500 transition-colors" />
                     </div>
-                  </button>
+                  </div>
                 ))
               )}
             </div>
