@@ -36,7 +36,8 @@ def init_db():
                 created_at TEXT,
                 decision_signal TEXT,
                 rejection_feedback TEXT,
-                prompt TEXT
+                prompt TEXT,
+                human_approval TEXT
             )
         ''')
         # Table for every log/event produced by the agents
@@ -63,6 +64,7 @@ def init_db():
                 decision_signal TEXT,
                 rejection_feedback TEXT,
                 prompt TEXT,
+                human_approval TEXT,
                 deleted_at TEXT
             )
         ''')
@@ -79,10 +81,17 @@ def init_db():
             )
         ''')
 
-        # Migration: Add columns if they don't exist
-        for column in ["decision_signal", "rejection_feedback", "prompt"]:
+        # Migration: Add columns to tasks if they don't exist
+        for column in ["decision_signal", "rejection_feedback", "prompt", "human_approval"]:
             try:
                 cursor.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        # Migration: Add columns to deleted_tasks if they don't exist
+        for column in ["decision_signal", "rejection_feedback", "prompt", "human_approval"]:
+            try:
+                cursor.execute(f"ALTER TABLE deleted_tasks ADD COLUMN {column} TEXT")
             except sqlite3.OperationalError:
                 pass  # Column already exists
             
