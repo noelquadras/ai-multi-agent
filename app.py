@@ -280,10 +280,9 @@ async def get_all_history():
 
 @app.get("/api/models")
 async def get_available_models():
-    return {"models": [
-        {"id": "ollama", "name": "Ollama (Local)", "speed": "medium", "cost": "free"},
-        {"id": "groq", "name": "Groq (Cloud)", "speed": "fast", "cost": "free tier"}
-    ]}
+    with open("models.json", "r") as f:
+        models = json.load(f)
+    return {"models": models}
 
 if __name__ == "__main__":
     import uvicorn

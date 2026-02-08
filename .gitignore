@@ -60,3 +60,5 @@ crew_tasks.db
 AGENTS.md
 new_README.md
 PROJECT_CONTEXT.md
+crew_tasks.db-shm
+crew_tasks.db-wal
