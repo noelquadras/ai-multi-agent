@@ -20,6 +20,7 @@ import {
   History,
 } from "lucide-react";
 import { HistorySidebar } from "@/components/HistorySidebar";
+import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
 
 /* =========================
    TYPES
@@ -73,7 +74,7 @@ export default function WorkspacePage() {
   const [cliLogs, setCliLogs] = useState<string[]>([]);
   const [sidePanel, setSidePanel] = useState<SidePanel>("cli");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -263,14 +264,14 @@ export default function WorkspacePage() {
 
   const handleReject = async (feedback: string) => {
     if (!taskId) return;
-    
+
     // Call regenerate endpoint which creates a new task with feedback
     const response = await fetch(`http://localhost:8000/api/task/${taskId}/regenerate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ feedback }),
     });
-    
+
     if (response.ok) {
       const data = await response.json();
       // Redirect to the new task
@@ -306,162 +307,149 @@ export default function WorkspacePage() {
   };
 
   return (
-    <>
-    <div className="flex h-screen bg-background overflow-hidden">
-      <div className="hidden md:block flex-none">
-        <AgentPanel agents={agents} />
-      </div>
-
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
-          <div className="flex items-center gap-3">
-            <Badge className={getStatusColor()}>
-              {taskStatus.toUpperCase()}
-            </Badge>
-            <Badge
-              variant="outline"
-              className="border-border text-muted-foreground text-xs"
-            >
-              {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
-            </Badge>
+    <SidebarProvider>
+      <HistorySidebar />
+      <SidebarInset>
+        <div className="flex h-screen bg-background overflow-hidden">
+          <div className="hidden md:block flex-none">
+            <AgentPanel agents={agents} />
           </div>
 
-          <div className="flex items-center gap-2">
-            {(taskStatus === "running" || taskStatus === "pending") && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handlePause}
-                className="text-yellow-500 hover:text-yellow-600"
-              >
-                <Pause className="w-4 h-4 mr-1" /> Pause
-              </Button>
-            )}
-            {taskStatus === "paused" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleResume}
-                className="text-green-500 hover:text-green-600"
-              >
-                <Play className="w-4 h-4 mr-1" /> Resume
-              </Button>
-            )}
-            <div className="w-px h-6 bg-border mx-2" />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleApprove}
-              disabled={!outputs.code}
-              className="text-green-500 disabled:opacity-50"
-            >
-              <Check className="w-4 h-4 mr-1" /> Approve
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsRejectModalOpen(true)}
-              disabled={!outputs.code}
-              className="text-red-500 disabled:opacity-50"
-            >
-              <X className="w-4 h-4 mr-1" /> Reject
-            </Button>
-            <div className="w-px h-6 bg-border mx-2" />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsHistoryOpen(true)}
-              className="text-muted-foreground mr-1"
-            >
-              <History className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => taskId && refreshStatus(taskId)}
-              className="text-muted-foreground"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
+              <div className="flex items-center gap-3">
+                <Badge className={getStatusColor()}>
+                  {taskStatus.toUpperCase()}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-border text-muted-foreground text-xs"
+                >
+                  {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
+                </Badge>
+              </div>
 
-        <div className="flex flex-1 overflow-hidden">
-          <div className="flex-1 overflow-hidden">
-            <CodeWorkspace code={outputs.code} isReadOnly />
-          </div>
-
-          <div className="hidden xl:flex flex-col border-l border-border">
-            <div className="flex border-b border-border bg-card">
-              <button
-                onClick={() => setSidePanel("cli")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${
-                  sidePanel === "cli"
-                    ? "bg-muted text-foreground border-b-2 border-green-500"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Terminal className="w-4 h-4" /> CLI Tests
-                {cliLogs.length > 0 && (
-                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <div className="flex items-center gap-2">
+                {(taskStatus === "running" || taskStatus === "pending") && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePause}
+                    className="text-yellow-500 hover:text-yellow-600"
+                  >
+                    <Pause className="w-4 h-4 mr-1" /> Pause
+                  </Button>
                 )}
-              </button>
-              <button
-                onClick={() => setSidePanel("docs")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${
-                  sidePanel === "docs"
-                    ? "bg-muted text-foreground border-b-2 border-blue-500"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <FileText className="w-4 h-4" /> Docs
-              </button>
+                {taskStatus === "paused" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleResume}
+                    className="text-green-500 hover:text-green-600"
+                  >
+                    <Play className="w-4 h-4 mr-1" /> Resume
+                  </Button>
+                )}
+                <div className="w-px h-6 bg-border mx-2" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleApprove}
+                  disabled={!outputs.code}
+                  className="text-green-500 disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4 mr-1" /> Approve
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsRejectModalOpen(true)}
+                  disabled={!outputs.code}
+                  className="text-red-500 disabled:opacity-50"
+                >
+                  <X className="w-4 h-4 mr-1" /> Reject
+                </Button>
+                <div className="w-px h-6 bg-border mx-2" />
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => taskId && refreshStatus(taskId)}
+                  className="text-muted-foreground"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
 
-            <div className="flex-1 overflow-hidden">
-              {sidePanel === "cli" && (
-                <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
-              )}
-              {sidePanel === "docs" && (
-                <div className="w-[400px] h-full bg-card p-4 overflow-auto">
-                  <h3 className="text-sm font-semibold text-foreground mb-4">
-                    Generated Documentation
-                  </h3>
-                  {outputs.documentation ? (
-                    <div className="prose prose-sm max-w-none">
-                      <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
-                        {outputs.documentation}
-                      </pre>
+            <div className="flex flex-1 overflow-hidden">
+              <div className="flex-1 overflow-hidden">
+                <CodeWorkspace code={outputs.code} isReadOnly />
+              </div>
+
+              <div className="hidden xl:flex flex-col border-l border-border">
+                <div className="flex border-b border-border bg-card">
+                  <button
+                    onClick={() => setSidePanel("cli")}
+                    className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "cli"
+                      ? "bg-muted text-foreground border-b-2 border-green-500"
+                      : "text-muted-foreground hover:text-foreground"
+                      }`}
+                  >
+                    <Terminal className="w-4 h-4" /> CLI Tests
+                    {cliLogs.length > 0 && (
+                      <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setSidePanel("docs")}
+                    className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "docs"
+                      ? "bg-muted text-foreground border-b-2 border-blue-500"
+                      : "text-muted-foreground hover:text-foreground"
+                      }`}
+                  >
+                    <FileText className="w-4 h-4" /> Docs
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-hidden">
+                  {sidePanel === "cli" && (
+                    <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
+                  )}
+                  {sidePanel === "docs" && (
+                    <div className="w-[400px] h-full bg-card p-4 overflow-auto">
+                      <h3 className="text-sm font-semibold text-foreground mb-4">
+                        Generated Documentation
+                      </h3>
+                      {outputs.documentation ? (
+                        <div className="prose prose-sm max-w-none">
+                          <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
+                            {outputs.documentation}
+                          </pre>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground text-sm">
+                          Documentation will appear here once generated.
+                        </p>
+                      )}
                     </div>
-                  ) : (
-                    <p className="text-muted-foreground text-sm">
-                      Documentation will appear here once generated.
-                    </p>
                   )}
                 </div>
-              )}
+              </div>
+            </div>
+
+            <div className="h-72 border-t border-border overflow-hidden">
+              <ActivityPanel events={events} />
             </div>
           </div>
         </div>
-
-        <div className="h-72 border-t border-border overflow-hidden">
-          <ActivityPanel events={events} />
-        </div>
-      </div>
-    </div>
-    
-    <HistorySidebar
-      isOpen={isHistoryOpen}
-      onClose={() => setIsHistoryOpen(false)}
-    />
-
-    {/* Reject Modal */}
-    <RejectModal
-      isOpen={isRejectModalOpen}
-      onClose={() => setIsRejectModalOpen(false)}
-      onSubmit={handleReject}
-    />
-    </>
+      </SidebarInset>
+      <RejectModal
+        isOpen={isRejectModalOpen}
+        onClose={() => setIsRejectModalOpen(false)}
+        onSubmit={handleReject}
+      />
+    </SidebarProvider>
   );
 }
 

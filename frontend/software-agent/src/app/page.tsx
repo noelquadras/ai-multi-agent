@@ -20,7 +20,11 @@ import { useExecution } from "@/app/context/ExecutionContext";
 import { UserMenu } from "@/components/auth/UserMenu";
 import { useTheme } from "@/hooks/useTheme";
 import { HistorySidebar } from "@/components/HistorySidebar";
-import { History } from "lucide-react";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
 
 /* =========================
    TYPES
@@ -48,7 +52,7 @@ export default function HomePage() {
   } = useExecution();
   const [localPrompt, setLocalPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState<string>("ollama");
-  
+
   // New state for per-agent configuration
   const [agentModels, setAgentModels] = useState<AgentModels>({
     coder: "default",
@@ -62,7 +66,6 @@ export default function HomePage() {
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(
     "checking",
   );
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   const [models, setModels] = useState<ModelOption[]>([]);
 
@@ -82,7 +85,7 @@ export default function HomePage() {
         setModels(mappedModels);
         // Select first model by default if none selected
         if (mappedModels.length > 0 && !selectedModel) {
-            setSelectedModel(mappedModels[0].id);
+          setSelectedModel(mappedModels[0].id);
         }
       })
       .catch((err) => console.error("Failed to fetch models:", err));
@@ -153,131 +156,123 @@ export default function HomePage() {
   ========================= */
 
   return (
-    <main className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Top Bar */}
-      <div className="h-14 border-b border-border bg-card flex items-center justify-between px-6">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <Bot className="text-primary-foreground w-5 h-5" />
+    <SidebarProvider>
+      <HistorySidebar />
+      <SidebarInset>
+        <main className="min-h-screen bg-background text-foreground flex flex-col">
+          {/* Top Bar */}
+          <div className="h-14 border-b border-border bg-card flex items-center justify-between px-6">
+            <div className="flex items-center gap-3">
+              <SidebarTrigger />
+              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                <Bot className="text-primary-foreground w-5 h-5" />
+              </div>
+              <span className="font-semibold text-sm">AI Software Team</span>
+            </div>
+
+            <div className="flex items-center gap-4">
+
+              {sessionStatus === "authenticated" ? (
+                <UserMenu />
+              ) : sessionStatus === "unauthenticated" ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => router.push("/auth/signin")}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <LogIn className="w-4 h-4 mr-2" />
+                  Sign In
+                </Button>
+              ) : null}
+
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleTheme}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <Sun className="h-4 w-4 dark:hidden" />
+                <Moon className="h-4 w-4 hidden dark:block" />
+              </Button>
+            </div>
           </div>
-          <span className="font-semibold text-sm">AI Software Team</span>
-        </div>
+          {/* Main Content */}
+          < div className="flex-1 flex flex-col items-center pt-24 px-4" >
+            {/* Header */}
+            < div className="flex items-center gap-3 mb-2" >
+              <h1 className="text-3xl font-bold">Autonomous AI Software Team</h1>
+            </div >
 
-        <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsHistoryOpen(true)}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <History className="w-4 h-4 mr-2" />
-            History
-          </Button>
+            <p className="text-muted-foreground mb-8">
+              Describe what you want to build. Our AI agents will generate, review,
+              test, and document it.
+            </p>
 
-          {sessionStatus === "authenticated" ? (
-            <UserMenu />
-          ) : sessionStatus === "unauthenticated" ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => router.push("/auth/signin")}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <LogIn className="w-4 h-4 mr-2" />
-              Sign In
-            </Button>
-          ) : null}
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <Sun className="h-4 w-4 dark:hidden" />
-            <Moon className="h-4 w-4 hidden dark:block" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col items-center pt-24 px-4">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-2">
-          <h1 className="text-3xl font-bold">Autonomous AI Software Team</h1>
-        </div>
-
-        <p className="text-muted-foreground mb-8">
-          Describe what you want to build. Our AI agents will generate, review,
-          test, and document it.
-        </p>
-
-        {/* API STATUS */}
-        <div className="mb-6">
-          {apiStatus === "online" && (
-            <Badge className="bg-green-500/20 text-green-500">API ONLINE</Badge>
-          )}
-          {apiStatus === "offline" && (
-            <Badge className="bg-red-500/20 text-red-500">API OFFLINE</Badge>
-          )}
-          {apiStatus === "checking" && (
-            <Badge className="bg-yellow-500/20 text-yellow-500">
-              <Loader2 className="w-3 h-3 mr-2 animate-spin" />
-              Checking API
-            </Badge>
-          )}
-        </div>
-
-        {/* INPUT CARD */}
-        <div className="w-full max-w-3xl bg-card border border-border rounded-xl p-4">
-          <Textarea
-            placeholder="Describe the application you want to build..."
-            value={localPrompt}
-            onChange={(e) => setLocalPrompt(e.target.value)}
-            disabled={isRunning}
-            className="min-h-35 bg-transparent border-none text-foreground resize-none placeholder:text-muted-foreground"
-          />
-
-          {/* Model Selection */}
-          <div className="mt-4 pt-4 border-t border-border">
-             <ModelSelector 
-                models={models}
-                selectedModel={selectedModel}
-                onSelectModel={setSelectedModel}
-                agentModels={agentModels}
-                onAgentModelChange={handleAgentModelChange}
-                disabled={isRunning}
-             />
-          </div>
-
-          <div className="flex justify-end mt-4">
-            <Button
-              disabled={
-                !localPrompt.trim() || apiStatus !== "online" || isRunning
-              }
-              onClick={startCrew}
-              className="bg-linear-to-r from-purple-600 to-blue-600 text-white hover:opacity-90"
-            >
-              {isRunning ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Running Crew
-                </>
-              ) : (
-                <>
-                  Build with AI Team
-                  <ArrowRight className="w-4 h-4 ml-2" />
-                </>
+            {/* API STATUS */}
+            <div className="mb-6">
+              {apiStatus === "online" && (
+                <Badge className="bg-green-500/20 text-green-500">API ONLINE</Badge>
               )}
-            </Button>
-          </div>
-        </div>
-      </div>
+              {apiStatus === "offline" && (
+                <Badge className="bg-red-500/20 text-red-500">API OFFLINE</Badge>
+              )}
+              {apiStatus === "checking" && (
+                <Badge className="bg-yellow-500/20 text-yellow-500">
+                  <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+                  Checking API
+                </Badge>
+              )}
+            </div>
 
-      <HistorySidebar
-        isOpen={isHistoryOpen}
-        onClose={() => setIsHistoryOpen(false)}
-      />
-    </main>
+            {/* INPUT CARD */}
+            <div className="w-full max-w-3xl bg-card border border-border rounded-xl p-4">
+              <Textarea
+                placeholder="Describe the application you want to build..."
+                value={localPrompt}
+                onChange={(e) => setLocalPrompt(e.target.value)}
+                disabled={isRunning}
+                className="min-h-35 bg-transparent border-none text-foreground resize-none placeholder:text-muted-foreground"
+              />
+
+              {/* Model Selection */}
+              <div className="mt-4 pt-4 border-t border-border">
+                <ModelSelector
+                  models={models}
+                  selectedModel={selectedModel}
+                  onSelectModel={setSelectedModel}
+                  agentModels={agentModels}
+                  onAgentModelChange={handleAgentModelChange}
+                  disabled={isRunning}
+                />
+              </div>
+
+              <div className="flex justify-end mt-4">
+                <Button
+                  disabled={
+                    !localPrompt.trim() || apiStatus !== "online" || isRunning
+                  }
+                  onClick={startCrew}
+                  className="bg-linear-to-r from-purple-600 to-blue-600 text-white hover:opacity-90"
+                >
+                  {isRunning ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Running Crew
+                    </>
+                  ) : (
+                    <>
+                      Build with AI Team
+                      <ArrowRight className="w-4 h-4 ml-2" />
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div >
+
+        </main >
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
