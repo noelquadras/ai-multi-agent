@@ -16,7 +16,6 @@ import {
   Sun,
   Moon,
 } from "lucide-react";
-import { useExecution } from "@/app/context/ExecutionContext";
 import { UserMenu } from "@/components/auth/UserMenu";
 import { useTheme } from "@/hooks/useTheme";
 import { HistorySidebar } from "@/components/HistorySidebar";
@@ -45,11 +44,6 @@ export default function HomePage() {
   const { toggleTheme } = useTheme();
   const router = useRouter();
   const { data: session, status: sessionStatus } = useSession();
-  const {
-    setPrompt: setGlobalPrompt,
-    startSubscription,
-    isRunning,
-  } = useExecution();
   const [localPrompt, setLocalPrompt] = useState("");
   const [selectedModel, setSelectedModel] = useState<string>("ollama");
 
@@ -136,8 +130,6 @@ export default function HomePage() {
       }
 
       const data: CrewResponse = await res.json();
-
-      setGlobalPrompt(localPrompt);
       router.push(`/workspace?taskId=${data.task_id}`);
     } catch (error) {
       console.error("Network error:", error);
@@ -167,7 +159,7 @@ export default function HomePage() {
               <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
                 <Bot className="text-primary-foreground w-5 h-5" />
               </div>
-              <span className="font-semibold text-sm">AI Software Team</span>
+              <span className="font-semibold text-sm">Multi-Agent AI Software Team</span>
             </div>
 
             <div className="flex items-center gap-4">
@@ -201,7 +193,7 @@ export default function HomePage() {
           < div className="flex-1 flex flex-col items-center pt-24 px-4" >
             {/* Header */}
             < div className="flex items-center gap-3 mb-2" >
-              <h1 className="text-3xl font-bold">Autonomous AI Software Team</h1>
+              <h1 className="text-3xl font-bold">Multi-Agent AI Software Team</h1>
             </div >
 
             <p className="text-muted-foreground mb-8">
@@ -231,7 +223,6 @@ export default function HomePage() {
                 placeholder="Describe the application you want to build..."
                 value={localPrompt}
                 onChange={(e) => setLocalPrompt(e.target.value)}
-                disabled={isRunning}
                 className="min-h-35 bg-transparent border-none text-foreground resize-none placeholder:text-muted-foreground"
               />
 
@@ -243,29 +234,21 @@ export default function HomePage() {
                   onSelectModel={setSelectedModel}
                   agentModels={agentModels}
                   onAgentModelChange={handleAgentModelChange}
-                  disabled={isRunning}
                 />
               </div>
 
               <div className="flex justify-end mt-4">
                 <Button
                   disabled={
-                    !localPrompt.trim() || apiStatus !== "online" || isRunning
+                    !localPrompt.trim() || apiStatus !== "online"
                   }
                   onClick={startCrew}
                   className="bg-linear-to-r from-purple-600 to-blue-600 text-white hover:opacity-90"
                 >
-                  {isRunning ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Running Crew
-                    </>
-                  ) : (
-                    <>
-                      Build with AI Team
-                      <ArrowRight className="w-4 h-4 ml-2" />
-                    </>
-                  )}
+                  <>
+                    Build with AI Team
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </>
                 </Button>
               </div>
             </div>

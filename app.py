@@ -253,7 +253,7 @@ IMPORTANT USER FEEDBACK (address this as top priority):
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO tasks (task_id, status, model, created_at, decision_signal, prompt) VALUES (?, ?, ?, ?, ?, ?)",
-            (new_task_id, "pending", model, datetime.now().isoformat(), None, original_prompt)
+            (new_task_id, "pending", model, datetime.now().isoformat(), None, new_prompt)
         )
         conn.commit()
     

@@ -264,6 +264,9 @@ export default function WorkspacePage() {
 
   const handleReject = async (feedback: string) => {
     if (!taskId) return;
+    await fetch(`http://localhost:8000/api/task/${taskId}/reject`, {
+      method: "POST",
+    });
 
     // Call regenerate endpoint which creates a new task with feedback
     const response = await fetch(`http://localhost:8000/api/task/${taskId}/regenerate`, {
