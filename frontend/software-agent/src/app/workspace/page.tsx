@@ -20,7 +20,7 @@ import {
   History,
 } from "lucide-react";
 import { HistorySidebar } from "@/components/HistorySidebar";
-import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
+import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 
 /* =========================
    TYPES
@@ -321,6 +321,7 @@ export default function WorkspacePage() {
           <div className="flex flex-1 flex-col overflow-hidden">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
               <div className="flex items-center gap-3">
+                <SidebarTrigger />
                 <Badge className={getStatusColor()}>
                   {taskStatus.toUpperCase()}
                 </Badge>

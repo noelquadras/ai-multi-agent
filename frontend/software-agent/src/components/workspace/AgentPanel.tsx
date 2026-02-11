@@ -1,9 +1,11 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AgentCard } from "./AgentCard";
-import { LayoutGrid } from "lucide-react";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Home } from "lucide-react";
 
 interface BackendAgent {
   id: string;
@@ -40,12 +42,12 @@ export function AgentPanel({ agents }: AgentPanelProps) {
     <Card className="h-full border-none rounded-none border-r border-border bg-background w-75 flex flex-col">
       <CardHeader className="pb-4 pt-5 px-5 border-b border-border">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-foreground">
-            <LayoutGrid className="w-4 h-4 text-purple-500" />
-            <CardTitle className="text-sm font-bold tracking-wider">
-              ARCHONS
-            </CardTitle>
-          </div>
+          <Link href="/">
+            <Button variant="ghost" className="flex items-center gap-2 px-0 hover:bg-transparent -ml-2">
+              <Home className="w-4 h-4 text-purple-500" />
+              <span className="text-sm font-bold tracking-wider">HOME</span>
+            </Button>
+          </Link>
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-muted-foreground font-mono">
               {activeCount} ACTIVE
