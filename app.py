@@ -16,11 +16,14 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 import httpx
+from fastapi import WebSocket, WebSocketDisconnect
+from terminal_service import manager as terminal_manager
 
 # Import database layer
 from database import (
     init_db, 
-    get_db_conn, 
+    get_db_conn,
+    get_task_status,
     update_task_status, 
     update_decision_signal,
     update_rejection_feedback,
@@ -165,6 +168,45 @@ async def stream_events(task_id: str, request: Request):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@app.websocket("/ws/terminal/{client_id}")
+async def websocket_terminal(websocket: WebSocket, client_id: str):
+    await websocket.accept()
+    # Use a fixed session_id to ensure persistence across page refreshes
+    session_id = "project_terminal_v1" 
+    
+    try:
+        session = terminal_manager.get_or_create_session(session_id)
+        
+        # Task to forward PTY output -> WebSocket
+        async def send_output():
+            async for data in session.read_stream():
+                try:
+                    await websocket.send_text(data)
+                except Exception:
+                    break
+        
+        reader_task = asyncio.create_task(send_output())
+        
+        # Main loop: WebSocket input -> PTY
+        try:
+            while True:
+                data = await websocket.receive_text()
+                # Simple protocol: "RESIZE:cols:rows" or raw input
+                if data.startswith("RESIZE:"):
+                    parts = data.split(":")
+                    if len(parts) == 3:
+                        session.resize(int(parts[1]), int(parts[2]))
+                else:
+                    session.write(data)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            reader_task.cancel()
+            
+    except Exception as e:
+        print(f"Terminal Error: {e}")
+        await websocket.close()
+
 # --- CONTROL ROUTES ---
 
 @app.post("/api/task/{task_id}/pause")
@@ -186,7 +228,10 @@ async def approve_code(task_id: str):
     update_decision_signal(task_id, "APPROVED")
     
     # If it was paused (waiting for approval), resume it
-    update_task_status(task_id, "running")
+    # If it was paused (waiting for approval), resume it
+    task_state = get_task_status(task_id)
+    if task_state and task_state.get("status") == "paused":
+        update_task_status(task_id, "running")
     
     emit_event(task_id, {
         "type": "human_approval",
@@ -208,7 +253,10 @@ async def reject_code(task_id: str, body: RejectRequest = None):
         update_rejection_feedback(task_id, body.feedback)
     
     # If it was paused, resume it
-    update_task_status(task_id, "running")
+    # If it was paused, resume it
+    task_state = get_task_status(task_id)
+    if task_state and task_state.get("status") == "paused":
+        update_task_status(task_id, "running")
     
     emit_event(task_id, {
         "type": "human_approval",

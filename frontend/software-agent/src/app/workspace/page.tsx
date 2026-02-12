@@ -9,6 +9,12 @@ import { CLIPanel } from "@/components/workspace/CLIPanel";
 import { RejectModal } from "@/components/workspace/RejectModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import dynamic from "next/dynamic";
+
+const TerminalComponent = dynamic(
+  () => import("@/components/Terminal").then((mod) => mod.Terminal),
+  { ssr: false }
+);
 import {
   RefreshCw,
   Pause,
@@ -418,7 +424,9 @@ export default function WorkspacePage() {
 
                 <div className="flex-1 overflow-hidden">
                   {sidePanel === "cli" && (
-                    <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
+                    <div className="h-full w-full bg-[#1a1b26]">
+                      <TerminalComponent className="h-full w-full" />
+                    </div>
                   )}
                   {sidePanel === "docs" && (
                     <div className="w-[400px] h-full bg-card p-4 overflow-auto">
