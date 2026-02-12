@@ -49,7 +49,7 @@ class TerminalSession:
 
     def resize(self, cols: int, rows: int):
         if self.active:
-            self.process.set_size(cols, rows)
+            self.process.setwinsize(rows, cols)
             
     def close(self):
         self.active = False

@@ -209,6 +209,52 @@ async def websocket_terminal(websocket: WebSocket, client_id: str):
 
 # --- CONTROL ROUTES ---
 
+class TerminalCommand(BaseModel):
+    command: str
+    save_code: Optional[str] = None
+    filename: Optional[str] = None
+    cwd: Optional[str] = None
+
+@app.post("/api/terminal/run")
+async def run_terminal_command(body: TerminalCommand):
+    """
+    Executes a command in the shared terminal session.
+    Optionally saves code to a file before running.
+    """
+    session_id = "project_terminal_v1"
+    try:
+        # Resolve working directory
+        cwd = body.cwd if body.cwd else "."
+        cwd_abs = os.path.abspath(cwd)
+        
+        # Ensure the directory exists
+        if not os.path.exists(cwd_abs):
+            os.makedirs(cwd_abs, exist_ok=True)
+
+        # If code is provided, save it to the file in the correct directory
+        if body.save_code and body.filename:
+            # Security check: ensure filename is simple (no path traversal)
+            if ".." in body.filename or "/" in body.filename or "\\" in body.filename:
+                raise HTTPException(status_code=400, detail="Invalid filename")
+            
+            file_path = os.path.join(cwd_abs, body.filename)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(body.save_code)
+
+        session = terminal_manager.get_or_create_session(session_id)
+        
+        # Change directory in terminal if a specific cwd was requested
+        if body.cwd:
+            # Use quotes to handle spaces in paths
+            session.write(f'cd "{cwd_abs}"' + "\n")
+            
+        # Send command + newline
+        session.write(body.command + "\n")
+        return {"status": "sent", "command": body.command}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/task/{task_id}/pause")
 async def pause_task(task_id: str):
     update_task_status(task_id, "paused")

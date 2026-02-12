@@ -9,8 +9,12 @@ import {
   CheckCircle,
   Copy,
   CodeIcon,
+  Play,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface CodeWorkspaceProps {
   code?: string;
@@ -25,9 +29,12 @@ export function CodeWorkspace({
   fileStructure,
   onCopyCode,
 }: CodeWorkspaceProps) {
-  const [activeFile, setActiveFile] = useState<string>("main.py");
+  const [activeFile, setActiveFile] = useState<string>("code.py");
   const [files, setFiles] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
+
+  const [showRunDialog, setShowRunDialog] = useState(false);
+  const [executionPath, setExecutionPath] = useState("./temp_run");
 
   useEffect(() => {
     // Initialize files from props
@@ -40,13 +47,13 @@ export function CodeWorkspace({
     } else if (code) {
       // If only code is provided, create a single file
       setFiles({
-        "main.py": code,
+        "code.py": code,
       });
-      setActiveFile("main.py");
+      setActiveFile("code.py");
     } else {
       // Default empty files
       setFiles({
-        "main.py":
+        "code.py":
           "# No code generated yet\n# Run the AI crew to generate code",
         "requirements.txt": "# Dependencies will be listed here",
         "README.md": "# Project documentation will appear here",
@@ -62,6 +69,43 @@ export function CodeWorkspace({
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRunCode = async (cwd?: string) => {
+    let command = "";
+    if (activeFile.endsWith(".py")) {
+      command = `python ${activeFile}`;
+    } else if (activeFile.endsWith(".js")) {
+      command = `node ${activeFile}`;
+    } else if (activeFile.endsWith(".ts") || activeFile.endsWith(".tsx")) {
+      command = `npx ts-node ${activeFile}`;
+    } else {
+      return; // file type not supported for direct run
+    }
+
+    try {
+      await fetch("http://localhost:8000/api/terminal/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command,
+          save_code: files[activeFile],
+          filename: activeFile,
+          cwd: cwd || "."
+        }),
+      });
+    } catch (e) {
+      console.error("Failed to run code:", e);
+    }
+  };
+
+  const initiateRun = () => {
+    setShowRunDialog(true);
+  };
+
+  const confirmRun = () => {
+    setShowRunDialog(false);
+    handleRunCode(executionPath);
   };
 
   const getFileIcon = (fileName: string) => {
@@ -127,11 +171,10 @@ export function CodeWorkspace({
               onClick={() => setActiveFile(fileName)}
               className={`
                     px-4 text-sm border-r border-border flex items-center gap-2 h-full transition-colors font-medium whitespace-nowrap
-                    ${
-                      activeFile === fileName
-                        ? "bg-muted text-foreground border-t-2 border-t-blue-500"
-                        : "bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }
+                    ${activeFile === fileName
+                  ? "bg-muted text-foreground border-t-2 border-t-blue-500"
+                  : "bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
+                }
                   `}
             >
               <span className={getFileColor(fileName)}>
@@ -145,15 +188,28 @@ export function CodeWorkspace({
         {/* Status / Label */}
         <div className="px-4 flex items-center gap-3">
           {files[activeFile] && files[activeFile].length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleCopyCode}
-              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <Copy className="w-3 h-3 mr-1" />
-              {copied ? "Copied!" : "Copy"}
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={initiateRun}
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
+                title="Run in Terminal"
+              >
+                <Play className="w-3 h-3 mr-1" />
+                Run
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleCopyCode}
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <Copy className="w-3 h-3 mr-1" />
+                {copied ? "Copied!" : "Copy"}
+              </Button>
+            </>
           )}
 
           <Badge
@@ -183,6 +239,56 @@ export function CodeWorkspace({
           </div>
         </div>
       </CardContent>
+
+      {/* Run Configuration Modal */}
+      {showRunDialog && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-md border-border shadow-lg">
+            <CardHeader className="flex flex-row items-center justify-between py-3 border-b border-border">
+              <h3 className="text-sm font-semibold">Run Configuration</h3>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => setShowRunDialog(false)}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="p-4 space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="execution-path" className="text-xs">
+                  Execution Directory
+                </Label>
+                <Input
+                  id="execution-path"
+                  value={executionPath}
+                  onChange={(e) => setExecutionPath(e.target.value)}
+                  placeholder="./temp_run"
+                  className="h-8 text-sm font-mono"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Specify a directory to run the code. Using a separate directory prevents the server from reloading.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowRunDialog(false)}
+                  className="h-8"
+                >
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={confirmRun} className="h-8">
+                  <Play className="w-3 h-3 mr-2" />
+                  Run Code
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </Card>
   );
 }
