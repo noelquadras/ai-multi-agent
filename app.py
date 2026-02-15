@@ -47,8 +47,17 @@ app.add_middleware(
 )
 
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     init_db()
+    # Set main loop for terminal manager and pre-warm session
+    loop = asyncio.get_running_loop()
+    terminal_manager.set_main_loop(loop)
+    # create the shared session on the main loop
+    try:
+        terminal_manager.get_or_create_session("project_terminal_v1", cwd=os.getcwd())
+        print("Terminal session 'project_terminal_v1' initialized on main loop.")
+    except Exception as e:
+        print(f"Failed to initialize terminal session: {e}")
 
 # =========================
 # LOGGER CLASS
@@ -224,7 +233,7 @@ async def run_terminal_command(body: TerminalCommand):
     session_id = "project_terminal_v1"
     try:
         # Resolve working directory
-        cwd = body.cwd if body.cwd else "."
+        cwd = "../../temp-run"
         cwd_abs = os.path.abspath(cwd)
         
         # Ensure the directory exists
@@ -243,14 +252,24 @@ async def run_terminal_command(body: TerminalCommand):
 
         session = terminal_manager.get_or_create_session(session_id)
         
-        # Change directory in terminal if a specific cwd was requested
+        # Combine cd and command to ensure they run in sequence defined by shell
+        # Use ; for PowerShell compatibility
         if body.cwd:
-            # Use quotes to handle spaces in paths
-            session.write(f'cd "{cwd_abs}"' + "\n")
-            
-        # Send command + newline
-        session.write(body.command + "\n")
-        return {"status": "sent", "command": body.command}
+             # This path is actually unreachable because we force cwd above, 
+             # but strictly speaking logic should use the resolved cwd_abs
+             pass
+        
+        full_command = f'cd "{cwd_abs}"; {body.command}'
+        
+        # Use new robust command execution
+        result = await session.run_command(full_command)
+        
+        return {
+            "status": "completed", 
+            "command": body.command,
+            "output": result["output"],
+            "exit_code": result["exit_code"]
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

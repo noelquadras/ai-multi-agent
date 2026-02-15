@@ -1,10 +1,9 @@
-# tools/executor.py
 import json
-import subprocess
-import tempfile
-import sys
 import os
-import textwrap
+import sys
+import shutil
+import asyncio
+from terminal_service import manager as terminal_manager
 
 # Blocklist of dangerous modules that could escape the sandbox
 BLOCKED_MODULES = [
@@ -22,18 +21,22 @@ BLOCKED_MODULES = [
     "code", "codeop", "compile",  # Code execution
 ]
 
-def execute(code: str, timeout_seconds: int = 10):
+async def _execute_impl(code: str, timeout_seconds: int):
     """
-    Execute `code` inside a sandbox subprocess with:
-      - builtin overrides to block open/input/os.system
-      - blocked dangerous imports
-      - timeout (timeout_seconds)
-    Returns a dict: {status, returncode, stdout, stderr, details}
+    Async implementation of execute logic.
     """
-
+    workspace_root = os.getcwd() 
+    # Use ../../temp_run as requested (outside ai-multi-agent)
+    temp_dir = os.path.abspath(os.path.join(workspace_root, "..", "..", "temp_run"))
+    os.makedirs(temp_dir, exist_ok=True)
+    
     # Create wrapper script which sets up sandboxing then execs user code
     wrapper = f'''
-import json, sys, builtins, io, traceback
+import json, sys, builtins, io, traceback, os
+
+# Add workspace root to sys.path to ensure project imports work
+if {repr(workspace_root)} not in sys.path:
+    sys.path.append({repr(workspace_root)})
 
 USER_CODE = {repr(code)}
 
@@ -63,6 +66,7 @@ try:
     _os.execve = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.exec is disabled"))
     _os.execvp = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.exec is disabled"))
     _os.spawn = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.spawn is disabled"))
+    # We allow some file ops if needed for agent tasks? For now keep strict.
     _os.remove = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.remove is disabled"))
     _os.unlink = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.unlink is disabled"))
     _os.rmdir = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.rmdir is disabled"))
@@ -103,7 +107,12 @@ try:
     exec(USER_CODE, {{}}, local_ns)
     result["status"] = "success"
     result["returncode"] = 0
-except Exception as e:
+except SystemExit as e:
+    # Handle sys.exit()
+    code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+    result["returncode"] = code
+    result["status"] = "success" if code == 0 else "error"
+except BaseException as e:
     # include traceback
     tb = traceback.format_exc()
     result["status"] = "exception"
@@ -116,58 +125,106 @@ finally:
     result["stderr"] = err_buf.getvalue()
     print(json.dumps(result, default=str))
 '''
-
-    # Write wrapper to temp file and run in subprocess
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as tf:
-        tf.write(wrapper)
-        wrapper_path = tf.name
-
+    
+    import uuid
+    wrapper_filename = f"agent_exec_{uuid.uuid4().hex[:8]}.py"
+    wrapper_path = os.path.join(temp_dir, wrapper_filename)
+    
+    with open(wrapper_path, "w", encoding="utf-8") as f:
+        f.write(wrapper)
+        
     try:
-        # run subprocess
-        proc = subprocess.run(
-            [sys.executable, wrapper_path],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds
-        )
-
-        stdout = proc.stdout.strip()
-        stderr = proc.stderr.strip()
-
-        # parse wrapper JSON printed to stdout
+        session_id = "project_terminal_v1"
+        session = terminal_manager.get_or_create_session(session_id)
+        
+        rel_path = os.path.relpath(wrapper_path, workspace_root)
+        
+        # Use absolute path to avoid issues if CWD changes in terminal
+        abs_path = os.path.abspath(wrapper_path)
+        
+        # Determine if we should cd first? 
+        # "cd workspace; python rel_path" might be cleaner for display but changes CWD state permanently.
+        # "python abs_path" is safe but verbose.
+        # Let's try to be smart: if terminal tracks CWD, use relative. But it doesn't robustly.
+        # Compromise: use absolute path for reliability.
+        command = f'python "{abs_path}"'
+        
+        # Run command in terminal with timeout
+        result_data = await session.run_command(command, timeout=float(timeout_seconds))
+        
+        stdout_raw = result_data["output"]
+        exit_code = result_data["exit_code"]
+        
+        # Parse the JSON from the wrapper
         parsed = None
-        if stdout:
-            try:
-                parsed = json.loads(stdout.splitlines()[-1])
-            except Exception:
-                parsed = None
+        if stdout_raw:
+            # Strip ANSI codes logic
+            import re
+            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+            clean_output = ansi_escape.sub('', stdout_raw)
+            
+            # Find the JSON object (last occurrence of { ... })
+            # Since print(json.dumps) is at the end, it should be near the end.
+            # It might be followed by prompts like "> "
+            # Regex to capture { ... } spanning lines? No, json.dumps is single line by default.
+            
+            # 2. Use a Greedy Regex to find the JSON object.
+            # This looks for the FIRST '{' and the LAST '}' in the entire blob,
+            # ignoring the PowerShell "noise" surrounding it.
+            match = re.search(r'(\{.*\})', clean_output, re.DOTALL)
+            
+            if match:
+                candidate = match.group(1)
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    # If there's extra junk inside the braces, try to find the 
+                    # shortest valid JSON string from the end (more robust)
+                    try:
+                        # Find the last occurrence of a closing brace
+                        last_brace = candidate.rfind('}')
+                        # Find the matching opening brace before it
+                        first_brace = candidate.find('{')
+                        parsed = json.loads(candidate[first_brace:last_brace+1])
+                    except Exception:
+                        pass
 
+            # lines = clean_output.strip().splitlines()
+            # for line in reversed(lines):
+            #     line = line.strip()
+            #     if not line: continue
+            #     # Basic check if it looks like JSON
+            #     if "{" in line and "}" in line:
+            #         try:
+            #             # Extract from first { to last }
+            #             start = line.find("{")
+            #             end = line.rfind("}") + 1
+            #             candidate = line[start:end]
+            #             parsed = json.loads(candidate)
+            #             break
+            #         except Exception:
+            #             pass
+        
         if parsed is None:
-            # fallback if wrapper failed to print expected JSON
             return {
                 "status": "error",
-                "returncode": proc.returncode,
-                "stdout": stdout,
-                "stderr": stderr or "No structured result from wrapper"
+                "returncode": exit_code,
+                "stdout": stdout_raw,
+                "stderr": f"Wrapper failed or no JSON output. Exit code: {exit_code}"
             }
-
-        # Attach captured process stderr if any
-        if stderr:
-            parsed.setdefault("process_stderr", "")
-            parsed["process_stderr"] += stderr
-
-        # Put the actual subprocess return code too
-        parsed["subprocess_returncode"] = proc.returncode
-
+            
+        parsed["subprocess_returncode"] = exit_code
+        
+        if "[TIMEOUT]" in stdout_raw:
+             return {
+                "status": "timeout",
+                "returncode": None,
+                "stdout": stdout_raw.replace("[TIMEOUT]", ""),
+                "stderr": f"Execution timed out after {timeout_seconds} seconds"
+            }
+            
         return parsed
 
-    except subprocess.TimeoutExpired as te:
-        return {
-            "status": "timeout",
-            "returncode": None,
-            "stdout": te.stdout or "",
-            "stderr": f"Execution timed out after {timeout_seconds} seconds"
-        }
     except Exception as e:
         return {
             "status": "error",
@@ -177,6 +234,47 @@ finally:
         }
     finally:
         try:
-            os.remove(wrapper_path)
+            if os.path.exists(wrapper_path):
+                os.remove(wrapper_path)
         except Exception:
             pass
+
+def execute(code: str, timeout_seconds: int = 10):
+    """
+    Synchronous wrapper for executing code in the terminal session (on the main loop).
+    """
+    # Check if we have a main loop
+    loop = terminal_manager.main_loop
+    
+    if not loop:
+        # Fallback: try getting running loop
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # We are in a thread with no loop, and manager has no loop set.
+            # Create a new loop for this thread?
+            # But we want to reuse session bound to main loop!
+            # If manager has no main loop, we assume we are standalone script?
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            terminal_manager.set_main_loop(loop)
+
+    # Use run_coroutine_threadsafe
+    import concurrent.futures
+    future = asyncio.run_coroutine_threadsafe(_execute_impl(code, timeout_seconds), loop)
+    try:
+        return future.result(timeout=timeout_seconds + 5) # generous timeout for wrapper overhead
+    except concurrent.futures.TimeoutError:
+         return {
+            "status": "timeout",
+            "returncode": None,
+            "stdout": "",
+            "stderr": f"Execution request timed out after {timeout_seconds + 5} seconds (threadsafe wait)"
+        }
+    except Exception as e:
+         return {
+            "status": "error",
+            "returncode": None,
+            "stdout": "",
+            "stderr": f"Executor threadsafe error: {str(e)}"
+        }

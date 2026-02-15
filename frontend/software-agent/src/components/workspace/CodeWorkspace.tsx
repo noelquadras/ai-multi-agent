@@ -10,11 +10,9 @@ import {
   Copy,
   CodeIcon,
   Play,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+
 
 interface CodeWorkspaceProps {
   code?: string;
@@ -33,8 +31,7 @@ export function CodeWorkspace({
   const [files, setFiles] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
 
-  const [showRunDialog, setShowRunDialog] = useState(false);
-  const [executionPath, setExecutionPath] = useState("./temp_run");
+
 
   useEffect(() => {
     // Initialize files from props
@@ -71,10 +68,10 @@ export function CodeWorkspace({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleRunCode = async (cwd?: string) => {
+  const handleRunCode = async () => {
     let command = "";
     if (activeFile.endsWith(".py")) {
-      command = `python ${activeFile}`;
+      command = `python -u ${activeFile}`;
     } else if (activeFile.endsWith(".js")) {
       command = `node ${activeFile}`;
     } else if (activeFile.endsWith(".ts") || activeFile.endsWith(".tsx")) {
@@ -91,7 +88,6 @@ export function CodeWorkspace({
           command,
           save_code: files[activeFile],
           filename: activeFile,
-          cwd: cwd || "."
         }),
       });
     } catch (e) {
@@ -99,14 +95,7 @@ export function CodeWorkspace({
     }
   };
 
-  const initiateRun = () => {
-    setShowRunDialog(true);
-  };
 
-  const confirmRun = () => {
-    setShowRunDialog(false);
-    handleRunCode(executionPath);
-  };
 
   const getFileIcon = (fileName: string) => {
     if (fileName.endsWith(".tsx") || fileName.endsWith(".jsx")) return "⚛";
@@ -192,7 +181,7 @@ export function CodeWorkspace({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={initiateRun}
+                onClick={() => handleRunCode()}
                 className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
                 title="Run in Terminal"
               >
@@ -240,55 +229,7 @@ export function CodeWorkspace({
         </div>
       </CardContent>
 
-      {/* Run Configuration Modal */}
-      {showRunDialog && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-          <Card className="w-full max-w-md border-border shadow-lg">
-            <CardHeader className="flex flex-row items-center justify-between py-3 border-b border-border">
-              <h3 className="text-sm font-semibold">Run Configuration</h3>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={() => setShowRunDialog(false)}
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </CardHeader>
-            <CardContent className="p-4 space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="execution-path" className="text-xs">
-                  Execution Directory
-                </Label>
-                <Input
-                  id="execution-path"
-                  value={executionPath}
-                  onChange={(e) => setExecutionPath(e.target.value)}
-                  placeholder="./temp_run"
-                  className="h-8 text-sm font-mono"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  Specify a directory to run the code. Using a separate directory prevents the server from reloading.
-                </p>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowRunDialog(false)}
-                  className="h-8"
-                >
-                  Cancel
-                </Button>
-                <Button size="sm" onClick={confirmRun} className="h-8">
-                  <Play className="w-3 h-3 mr-2" />
-                  Run Code
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+
     </Card>
   );
 }

@@ -55,7 +55,7 @@ interface TaskOutputs {
   testResults: string;
 }
 
-type SidePanel = "cli" | "docs";
+type SidePanel = "cli" | "docs" | "terminal";
 
 /* =========================
    COMPONENT
@@ -412,6 +412,15 @@ export default function WorkspacePage() {
                     )}
                   </button>
                   <button
+                    onClick={() => setSidePanel("terminal")}
+                    className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "terminal"
+                      ? "bg-muted text-foreground border-b-2 border-green-500"
+                      : "text-muted-foreground hover:text-foreground"
+                      }`}
+                  >
+                    <Terminal className="w-4 h-4" /> Terminal
+                  </button>
+                  <button
                     onClick={() => setSidePanel("docs")}
                     className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "docs"
                       ? "bg-muted text-foreground border-b-2 border-blue-500"
@@ -424,6 +433,9 @@ export default function WorkspacePage() {
 
                 <div className="flex-1 overflow-hidden">
                   {sidePanel === "cli" && (
+                    <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
+                  )}
+                  {sidePanel === "terminal" && (
                     <div className="h-full w-full bg-[#1a1b26]">
                       <TerminalComponent className="h-full w-full" />
                     </div>
