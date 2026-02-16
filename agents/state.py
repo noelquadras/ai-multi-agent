@@ -26,7 +26,9 @@ class AgentState(TypedDict):
     decision: str  # "YES" or "NO"
     refined_code: str
     documentation: str
-    test_results: str  # CLI test output
+    test_results: str  # CLI test output summary
+    test_output: Optional[dict] # Raw execution results (returncode, stdout, stderr)
+    analysis: str # Analyzer's reasoning and instructions
     
     # Metadata
     messages: Annotated[Sequence[BaseMessage], operator.add]

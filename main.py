@@ -12,7 +12,10 @@ from agents.nodes import (
     doc_writer_node,
     cli_tester_node,
     should_refine,
-    should_refine_after_test,
+    cli_tester_node,
+    terminal_analyzer_node,
+    should_refine,
+    should_refine_after_analysis,
     set_model_config
 )
 from typing import Dict, Optional
@@ -60,6 +63,7 @@ def create_agent_graph(include_cli_test: bool = True):
     
     if include_cli_test:
         workflow.add_node("test", cli_tester_node)
+        workflow.add_node("analyze_test", terminal_analyzer_node)
     
     # Define edges (workflow connections)
     workflow.set_entry_point("generate")
@@ -79,9 +83,13 @@ def create_agent_graph(include_cli_test: bool = True):
             }
         )
         workflow.add_edge("refine", "test")
+        
+        # New Analyzer Step
+        workflow.add_edge("test", "analyze_test")
+        
         workflow.add_conditional_edges(
-            "test",
-            should_refine_after_test, # Our new function
+            "analyze_test",
+            should_refine_after_analysis,
             {
                 "refine": "refine",    # Loop back
                 "document": "document" # Move forward

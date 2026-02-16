@@ -492,6 +492,9 @@ Review Feedback:
 
 CLI Test Results (if any):
 {state.get('test_results', 'No test results available.')}
+
+Analyzer Feedback (if any):
+{state.get('analysis', 'No analysis available.')}
 {feedback_section}
 Your task:
 1. Read the original code
@@ -733,7 +736,7 @@ def cli_tester_node(state: AgentState) -> AgentState:
     
     emit_event(state["task_id"], {
         "type": "cli_output",
-        "message": "$ python main.py",
+        "message": f"Running code ({len(code_to_test.splitlines())} lines)...",
     })
     
     emit_event(state["task_id"], {
@@ -820,6 +823,7 @@ def cli_tester_node(state: AgentState) -> AgentState:
     return {
         **state,
         "test_results": "\n".join(test_results),
+        "test_output": result,  # Store raw output for analyzer
         "current_agent": "tester",
         "iteration_count": state.get("iteration_count", 0) + 1
     }
@@ -853,18 +857,140 @@ def should_refine(state: AgentState) -> str:
 
 
 # ==========================================
-# CONDITIONAL EDGE: Should Refine after Testing?
+# NODE 7: TERMINAL ANALYZER
 # ==========================================
-def should_refine_after_test(state: AgentState) -> str:
+def terminal_analyzer_node(state: AgentState) -> AgentState:
     """
-    Decide if we should go to documentation or loop back for fixes.
+    Analyze the raw terminal output to determine if code needs refinement
+    and what specific fixes are required.
     """
-    results = state.get("test_results", "")
+    check_interrupts(state["task_id"])
+    
+    emit_event(state["task_id"], {
+        "type": "agent_start",
+        "agent": "analyzer"
+    })
+    
+    emit_event(state["task_id"], {
+        "type": "log",
+        "message": "[AGENT_START analyzer]"
+    })
+    
+    test_output = state.get("test_output", {})
+    returncode = test_output.get("returncode")
+    stdout = test_output.get("stdout", "")
+    stderr = test_output.get("stderr", "")
+    traceback = test_output.get("traceback", "")
+    
+    # If successful, skip analysis
+    if returncode == 0 and not traceback:
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "✅ Analyzer: Code executed successfully. No fix needed."
+        })
+        return {
+            **state,
+            "analysis": "PASS",
+            "decision": "NO", # Override decision to NO if tests passed
+            "current_agent": "analyzer"
+        }
+    
+    # Analyze the error
+    prompt = f"""You are a Python Debugging Expert.
+    
+The code executed but failed with the following output:
+
+RETURN CODE: {returncode}
+
+STDOUT:
+{stdout}
+
+STDERR:
+{stderr}
+
+TRACEBACK:
+{traceback}
+
+Analyze the error carefully.
+1. Identify the root cause (SyntaxError, logic error, missing dependency, etc.).
+2. Formulate a specific fix strategy.
+
+STRICT OUTPUT FORMAT:
+If the error is trivial or the code actually worked but printed to stderr (e.g. warnings):
+PASS
+
+If a fix is required, output:
+FIX_REQUIRED: [Detailed explanation of the fix]
+
+Example:
+FIX_REQUIRED: The code failed with a ZeroDivisionError. Add a try/except block around the division operation to handle this case.
+"""
+
+    messages = [
+        SystemMessage(content="You are a smart debugger. Analyze runtime errors."),
+        HumanMessage(content=prompt)
+    ]
+    
+    try:
+        # Use heavier model for analysis
+        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("analyzer", ""))
+        response = llm.invoke(messages)
+        analysis = response.content.strip()
+        
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"🔍 Analyzer: {analysis}"
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "agent_end",
+            "agent": "analyzer"
+        })
+         
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "[AGENT_END analyzer]"
+        })
+        
+        return {
+            **state,
+            "analysis": analysis,
+            "current_agent": "analyzer",
+             "messages": state.get("messages", []) + messages + [response]
+        }
+        
+    except Exception as e:
+        emit_event(state["task_id"], {
+            "type": "system_error",
+            "error": f"Analysis failed: {str(e)}"
+        })
+        return {
+            **state,
+            "analysis": "FIX_REQUIRED: Analyzer failed, please check logs manually.",
+            "error": str(e),
+            "current_agent": "analyzer"
+        }
+
+
+# ==========================================
+# CONDITIONAL EDGE: Should Refine after Analysis?
+# ==========================================
+def should_refine_after_analysis(state: AgentState) -> str:
+    """
+    Decide based on the Analyzer's output.
+    """
+    analysis = state.get("analysis", "")
     iteration_count = state.get("iteration_count", 0)
 
-    # If the test passed, or we've tried too many times (e.g., 3), move to docs
-    if "✅ Test PASSED" in results or iteration_count >= 15:
+    # If too many iterations, force stop to prevent infinite loops
+    if iteration_count >= 15:
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "🛑 Max iterations reached. Stopping."
+        })
         return "document"
+
+    if "FIX_REQUIRED" in analysis:
+        return "refine"
     
-    # If it failed or timed out, send it back to the refiner
-    return "refine"
+    return "document"

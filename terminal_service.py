@@ -2,20 +2,24 @@ import os
 import asyncio
 import threading
 import time
-from typing import Dict, Optional
+import re
+from typing import Dict, Optional, List
 
 # Try importing pywinpty
 try:
     from winpty import PtyProcess
 except ImportError:
     PtyProcess = None
-import re
 
 class TerminalSession:
     def __init__(self, process, loop=None):
         self.process = process
         self.loop = loop or asyncio.get_running_loop()
-        self.queue = asyncio.Queue()
+        
+        # Support multiple listeners for multicasting (WebSocket + run_command)
+        self.listeners: List[asyncio.Queue] = []
+        self.control_listeners: List[asyncio.Queue] = []
+        
         self.active = True
         self.busy = False
         
@@ -28,50 +32,90 @@ class TerminalSession:
                 # This blocks until data is available
                 data = self.process.read(4096)
                 if data:
-                    self.loop.call_soon_threadsafe(self.queue.put_nowait, data)
+                    # 1. Send raw data to control listeners (commands need exact output)
+                    for q in list(self.control_listeners):
+                        self.loop.call_soon_threadsafe(q.put_nowait, data)
+                    
+                    # 2. Send sanitized data to display listeners (WebSockets)
+                    # We strip out the agent's hidden commands/markers to keep it clean
+                    clean_data = self._sanitize_output(data)
+                    if clean_data:
+                        for q in list(self.listeners):
+                            self.loop.call_soon_threadsafe(q.put_nowait, clean_data)
                 else:
                     time.sleep(0.01)
             except Exception as e:
+                # Handle EOF or error
                 if self.active:
                     print(f"PTY Read Error: {e}")
                 self.active = False
                 break
 
+    def _sanitize_output(self, data: str) -> str:
+        """
+        Filters out the internal agent command machinery only for the display.
+        This handles the user requirement to show 'only the one-line main exact command'
+        and 'real background outputs', hiding the complex implementation details.
+        """
+        # Remove the echo of the appended exit logic
+        # Matches: ; Write-Host "__AGENT_DONE__... up to end of line or buffer
+        # We use a broad non-greedy match.
+        data = re.sub(r';\s*Write-Host\s+"__AGENT_DONE__.*', '', data)
+        
+        # Remove the execution of the marker itself (output)
+        # Matches: __AGENT_DONE__RUN_xxx 0 (or similar exit code)
+        data = re.sub(r'__AGENT_DONE__\w+\s+(-?\d+)?', '', data)
+        
+        return data
+
     async def read_stream(self):
-        while self.active:
-            try:
-                data = await self.queue.get()
-                yield data
-            except asyncio.CancelledError:
-                break
+        """Streaming generator for WebSockets."""
+        q = asyncio.Queue()
+        self.listeners.append(q)
+        try:
+            while self.active:
+                try:
+                    data = await q.get()
+                    yield data
+                except asyncio.CancelledError:
+                    break
+        finally:
+            if q in self.listeners:
+                self.listeners.remove(q)
 
     def write(self, data: str):
         if self.active:
             self.process.write(data)
 
     async def run_command(self, command: str, timeout: float = 20.0):
+        """
+        Executes a command and returns the output (cleaned) and exit code.
+        """
         if self.busy:
             raise RuntimeError("Terminal is busy")
         
         self.busy = True
         output_buffer = ""
         marker = "__AGENT_DONE__"
+        run_id = f"RUN_{int(time.time())}"
+        
+        # We use a specialized listener for this command to capture its specific output
+        control_queue = asyncio.Queue()
+        self.control_listeners.append(control_queue)
         
         try:
-            # Inline the exit code extraction logic to avoid defining a function that gets echoed
-            # We use cls to clear previous output, helping to ensure a clean state
+            # Inline the exit code extraction logic
             # Logic: Write marker followed by exit code (0 if success, else LASTEXITCODE or 1)
-            exit_logic = f'Write-Host "{marker} $(if ($?) {{ 0 }} else {{ if ($LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }} }})"'
+            exit_logic = f'Write-Host "{marker}_{run_id} $(if ($?) {{ 0 }} else {{ if ($LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }} }})"'
             
-            # Combine commands: Clear Screen -> Run Command -> Write Exit Code
-            full_command = f'cls; {command}; {exit_logic}'
+            # Combine commands: Command -> Write Exit Code
+            full_command = f'{command}; {exit_logic}'
             
             self.process.write(full_command + "\r\n")
             
             start_time = time.time()
             
             while True:
-                # Check timeout
                 if time.time() - start_time > timeout:
                     output_buffer += "\n[TIMEOUT]"
                     try:
@@ -82,30 +126,29 @@ class TerminalSession:
                 
                 try:
                     # Non-blocking get from queue with short timeout
-                    chunk = await asyncio.wait_for(self.queue.get(), timeout=0.1)
+                    chunk = await asyncio.wait_for(control_queue.get(), timeout=0.1)
                     output_buffer += chunk
                     
-                    # Check for marker
-                    if marker in output_buffer:
-                        # We found the marker. But we should wait until we have the exit code too.
-                        if re.search(f"{marker}\\s*-?\\d+", output_buffer):
-                            break
+                    # Check for completion marker in the accumulated buffer
+                    if re.search(f"{marker}_{run_id}\\s*(-?\\d+)", output_buffer):
+                        break
                             
                 except asyncio.TimeoutError:
                     continue
+                    
         except Exception:
-             # If something crashes in the loop (unlikely)
              pass
         finally:
             self.busy = False
+            if control_queue in self.control_listeners:
+                self.control_listeners.remove(control_queue)
             
-        # Parse output and exit code
+        # Parse output and exit code from the captured buffer
         exit_code = -1
         clean_output = output_buffer
         
         # Extract exit code
-        # We look for the last occurrence of marker + number
-        matches = list(re.finditer(f"{marker}\\s*(-?\\d+)", output_buffer))
+        matches = list(re.finditer(f"{marker}_{run_id}\\s*(-?\\d+)", output_buffer))
         if matches:
             last_match = matches[-1]
             try:
@@ -113,16 +156,17 @@ class TerminalSession:
             except ValueError:
                 pass
             
-            # The output up to the marker is the clean output
-            # But wait, input echo also contains the marker string!
-            # Input echo: ... command; __agent_done ...
-            # The definition of __agent_done is hidden if we used function?
-            # No, input echo of `__agent_done` command is just `__agent_done`.
-            # True output is `__AGENT_DONE__ 0`.
-            # So `__agent_done` input echo does NOT match `__AGENT_DONE__ \d+`.
-            # Excellent.
-            
             clean_output = output_buffer[:last_match.start()]
+
+        # Also strip the command echo from the RETURN value (for the programmatic caller)
+        # The display listener already got it stripped via _sanitize_output.
+        # We try to remove the specific full_command string if present at start.
+        clean_output = clean_output.replace(full_command, "")
+        
+        # We also might want to remove the standard echo of 'command' if user requested "outputs only".
+        # But 'executor.py' expects the output. 
+        # Typically clean_output here includes the echo of the command.
+        # 'executor.py' filters extensively, so we leave it relatively raw but minus the injection.
             
         return {
             "output": clean_output.strip(),
@@ -130,7 +174,7 @@ class TerminalSession:
         }
 
     def resize(self, cols: int, rows: int):
-        if self.active:
+        if self.active and hasattr(self.process, 'setwinsize'):
             self.process.setwinsize(rows, cols)
             
     def close(self):

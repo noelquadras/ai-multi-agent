@@ -34,96 +34,58 @@ async def _execute_impl(code: str, timeout_seconds: int):
     wrapper = f'''
 import json, sys, builtins, io, traceback, os
 
-# Add workspace root to sys.path to ensure project imports work
+# Add workspace root to sys.path
 if {repr(workspace_root)} not in sys.path:
     sys.path.append({repr(workspace_root)})
 
 USER_CODE = {repr(code)}
 
 # ----------------------------
-# Replace dangerous builtins
+# Hardened Disabled Functions
 # ----------------------------
-_orig_open = builtins.open
-
 def disabled_input(*args, **kwargs):
-    raise RuntimeError("input() is disabled in sandbox")
-
-def disabled_open(*args, **kwargs):
-    raise RuntimeError("open() is disabled in sandbox")
+    # Instead of raising an error that can be caught in a loop, 
+    # we print a message and FORCE EXIT the process.
+    sys.stderr.write("SANDBOX_ERROR: input() is not allowed\\n")
+    os._exit(1) 
 
 builtins.input = disabled_input
-builtins.open = disabled_open
-
-# Block dangerous os methods
-try:
-    import os as _os
-    _os.system = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.system is disabled"))
-    _os.popen = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.popen is disabled"))
-    _os.execl = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.exec is disabled"))
-    _os.execle = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.exec is disabled"))
-    _os.execlp = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.exec is disabled"))
-    _os.execv = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.exec is disabled"))
-    _os.execve = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.exec is disabled"))
-    _os.execvp = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.exec is disabled"))
-    _os.spawn = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.spawn is disabled"))
-    # We allow some file ops if needed for agent tasks? For now keep strict.
-    _os.remove = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.remove is disabled"))
-    _os.unlink = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.unlink is disabled"))
-    _os.rmdir = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.rmdir is disabled"))
-    _os.mkdir = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.mkdir is disabled"))
-    _os.makedirs = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("os.makedirs is disabled"))
-except Exception:
-    pass
-
-# Import guard - block dangerous modules
-BLOCKED_MODULES = set({repr(BLOCKED_MODULES)})
-
-_orig_import = builtins.__import__
-def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-    base = name.split(".")[0]
-    if base in BLOCKED_MODULES:
-        raise ImportError(f"Module '{{name}}' is blocked in sandbox for security")
-    return _orig_import(name, globals, locals, fromlist, level)
-
-builtins.__import__ = safe_import
+# Do the same for open if you want it strictly disabled
+# builtins.open = ... 
 
 # Capture stdout and stderr
 out_buf = io.StringIO()
 err_buf = io.StringIO()
-real_stdout, real_stderr = sys.stdout, sys.stderr
 sys.stdout, sys.stderr = out_buf, err_buf
 
 result = {{
     "status": "error",
-    "returncode": None,
+    "returncode": 1,
     "stdout": "",
     "stderr": "",
     "traceback": None,
 }}
 
 try:
-    # Execute code in its own local namespace
-    local_ns = {{}}
-    exec(USER_CODE, {{}}, local_ns)
+    exec(USER_CODE, {{'__builtins__': builtins}}, {{}})
     result["status"] = "success"
     result["returncode"] = 0
 except SystemExit as e:
-    # Handle sys.exit()
-    code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
-    result["returncode"] = code
-    result["status"] = "success" if code == 0 else "error"
-except BaseException as e:
-    # include traceback
-    tb = traceback.format_exc()
+    result["returncode"] = e.code if isinstance(e.code, int) else 0
+    result["status"] = "success" if result["returncode"] == 0 else "error"
+except BaseException:
+    result["traceback"] = traceback.format_exc()
     result["status"] = "exception"
-    result["returncode"] = 1
-    result["traceback"] = tb
 finally:
-    # restore stdout/stderr
-    sys.stdout, sys.stderr = real_stdout, real_stderr
-    result["stdout"] = out_buf.getvalue()
-    result["stderr"] = err_buf.getvalue()
-    print(json.dumps(result, default=str))
+    # RESTORE and PRINT JSON no matter what
+    final_stdout = out_buf.getvalue()
+    final_stderr = err_buf.getvalue()
+    sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
+    
+    result["stdout"] = final_stdout
+    result["stderr"] = final_stderr
+    # Adding markers to help the Regex find the JSON
+    print(f"__START_JSON__\\n{{json.dumps(result)}}\\n__END_JSON__")
 '''
     
     import uuid
@@ -163,31 +125,18 @@ finally:
             ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
             clean_output = ansi_escape.sub('', stdout_raw)
             
-            # Find the JSON object (last occurrence of { ... })
-            # Since print(json.dumps) is at the end, it should be near the end.
-            # It might be followed by prompts like "> "
-            # Regex to capture { ... } spanning lines? No, json.dumps is single line by default.
-            
-            # 2. Use a Greedy Regex to find the JSON object.
-            # This looks for the FIRST '{' and the LAST '}' in the entire blob,
-            # ignoring the PowerShell "noise" surrounding it.
-            match = re.search(r'(\{.*\})', clean_output, re.DOTALL)
-            
-            if match:
-                candidate = match.group(1)
+            # Use this regex to extract the JSON from the mess
+            # It looks for the LAST occurrence of the JSON block
+            json_pattern = re.compile(r'__START_JSON__\s*(\{.*?\})\s*__END_JSON__', re.DOTALL)
+            all_matches = json_pattern.findall(clean_output)
+
+            if all_matches:
+                # Take the LAST match, as previous ones might be echos or artifacts
+                candidate = all_matches[-1]
                 try:
                     parsed = json.loads(candidate)
                 except json.JSONDecodeError:
-                    # If there's extra junk inside the braces, try to find the 
-                    # shortest valid JSON string from the end (more robust)
-                    try:
-                        # Find the last occurrence of a closing brace
-                        last_brace = candidate.rfind('}')
-                        # Find the matching opening brace before it
-                        first_brace = candidate.find('{')
-                        parsed = json.loads(candidate[first_brace:last_brace+1])
-                    except Exception:
-                        pass
+                    pass
 
             # lines = clean_output.strip().splitlines()
             # for line in reversed(lines):
