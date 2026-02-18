@@ -26,10 +26,20 @@ _groq_api_key = ""
 
 def get_ollama_llm():
     """Get or create Ollama LLM instance."""
-    global _ollama_llm
-    if _ollama_llm is None:
+    global _ollama_llm, _current_model
+    
+    # Determine model name
+    # If _current_model is "ollama" (generic) or "groq", fallback to default
+    # Otherwise use the specific model name provided (e.g. "llama3:latest")
+    model_name = "mistral:7b-instruct"
+    if _current_model and _current_model not in ["ollama", "groq"]:
+        model_name = _current_model
+        
+    # Re-initialize if model changed or not initialized
+    if _ollama_llm is None or getattr(_ollama_llm, "model", "") != model_name:
+        print(f"Initializing Ollama with model: {model_name}")
         _ollama_llm = ChatOllama(
-            model="mistral:7b-instruct",
+            model=model_name,
             base_url="http://localhost:11434",
             temperature=0.7
         )
