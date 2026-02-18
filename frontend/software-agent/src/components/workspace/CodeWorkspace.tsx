@@ -211,18 +211,16 @@ export function CodeWorkspace({
       </CardHeader>
 
       <CardContent className="flex-1 p-0 overflow-hidden">
-        <div className="h-full relative">
-          <pre className="h-full p-4 overflow-auto bg-muted text-sm font-mono text-foreground whitespace-pre-wrap">
-            <code className="block min-h-full">
-              {files[activeFile] || "# File is empty"}
-            </code>
-          </pre>
-
-          {/* Line numbers */}
-          <div className="absolute left-0 top-0 bottom-0 w-12 bg-card/50 border-r border-border text-right pr-2 text-xs text-muted-foreground font-mono overflow-hidden">
-            {files[activeFile]?.split("\n").map((_, i) => (
-              <div key={i} className="leading-6">
-                {i + 1}
+        <div className="h-full overflow-auto bg-muted text-sm font-mono">
+          <div className="min-w-fit">
+            {(files[activeFile] || "# File is empty").split("\n").map((line, i) => (
+              <div key={i} className="flex hover:bg-muted-foreground/5">
+                <div className="shrink-0 w-12 bg-muted border-r border-border text-right pr-3 select-none sticky left-0 text-muted-foreground z-10 h-auto">
+                  {i + 1}
+                </div>
+                <pre className="grow pl-4 text-foreground whitespace-pre-wrap font-mono break-all py-[0.1rem]">
+                  {line || " "}
+                </pre>
               </div>
             ))}
           </div>

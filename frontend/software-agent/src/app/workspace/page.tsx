@@ -78,7 +78,7 @@ export default function WorkspacePage() {
     testResults: "",
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
-  const [sidePanel, setSidePanel] = useState<SidePanel>("cli");
+  const [activeTab, setActiveTab] = useState<SidePanel>("cli");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
 
 
@@ -128,6 +128,13 @@ export default function WorkspacePage() {
       id: "doc_writer",
       name: "Doc Writer",
       role: "Documentation",
+      status: "idle",
+      progress: 0,
+    },
+    analyzer: {
+      id: "analyzer",
+      name: "Analyzer",
+      role: "Terminal Analysis",
       status: "idle",
       progress: 0,
     },
@@ -397,73 +404,73 @@ export default function WorkspacePage() {
                 <CodeWorkspace code={outputs.code} isReadOnly />
               </div>
 
-              <div className="hidden xl:flex flex-col border-l border-border">
-                <div className="flex border-b border-border bg-card">
-                  <button
-                    onClick={() => setSidePanel("cli")}
-                    className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "cli"
-                      ? "bg-muted text-foreground border-b-2 border-green-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <Terminal className="w-4 h-4" /> CLI Tests
-                    {cliLogs.length > 0 && (
-                      <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setSidePanel("terminal")}
-                    className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "terminal"
-                      ? "bg-muted text-foreground border-b-2 border-green-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <Terminal className="w-4 h-4" /> Terminal
-                  </button>
-                  <button
-                    onClick={() => setSidePanel("docs")}
-                    className={`flex items-center gap-2 px-4 py-2 text-sm ${sidePanel === "docs"
-                      ? "bg-muted text-foreground border-b-2 border-blue-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <FileText className="w-4 h-4" /> Docs
-                  </button>
-                </div>
-
-                <div className="flex-1 overflow-hidden">
-                  {sidePanel === "cli" && (
-                    <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
-                  )}
-                  {sidePanel === "terminal" && (
-                    <div className="h-full w-full bg-[#1a1b26]">
-                      <TerminalComponent className="h-full w-full" />
-                    </div>
-                  )}
-                  {sidePanel === "docs" && (
-                    <div className="w-[400px] h-full bg-card p-4 overflow-auto">
-                      <h3 className="text-sm font-semibold text-foreground mb-4">
-                        Generated Documentation
-                      </h3>
-                      {outputs.documentation ? (
-                        <div className="prose prose-sm max-w-none">
-                          <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
-                            {outputs.documentation}
-                          </pre>
-                        </div>
-                      ) : (
-                        <p className="text-muted-foreground text-sm">
-                          Documentation will appear here once generated.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
+              <div className="hidden xl:flex flex-col border-l border-border w-[400px]">
+                <ActivityPanel events={events} />
               </div>
             </div>
 
-            <div className="h-72 border-t border-border overflow-hidden">
-              <ActivityPanel events={events} />
+            <div className="h-72 border-t border-border overflow-hidden flex flex-col">
+              <div className="flex border-b border-border bg-card">
+                <button
+                  onClick={() => setActiveTab("cli")}
+                  className={`flex items-center gap-2 px-4 py-2 text-sm ${activeTab === "cli"
+                    ? "bg-muted text-foreground border-b-2 border-green-500"
+                    : "text-muted-foreground hover:text-foreground"
+                    }`}
+                >
+                  <Terminal className="w-4 h-4" /> CLI Tests
+                  {cliLogs.length > 0 && (
+                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                  )}
+                </button>
+                <button
+                  onClick={() => setActiveTab("terminal")}
+                  className={`flex items-center gap-2 px-4 py-2 text-sm ${activeTab === "terminal"
+                    ? "bg-muted text-foreground border-b-2 border-green-500"
+                    : "text-muted-foreground hover:text-foreground"
+                    }`}
+                >
+                  <Terminal className="w-4 h-4" /> Terminal
+                </button>
+                <button
+                  onClick={() => setActiveTab("docs")}
+                  className={`flex items-center gap-2 px-4 py-2 text-sm ${activeTab === "docs"
+                    ? "bg-muted text-foreground border-b-2 border-blue-500"
+                    : "text-muted-foreground hover:text-foreground"
+                    }`}
+                >
+                  <FileText className="w-4 h-4" /> Docs
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-hidden">
+                {activeTab === "cli" && (
+                  <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
+                )}
+                {activeTab === "terminal" && (
+                  <div className="h-full w-full bg-[#1a1b26]">
+                    <TerminalComponent className="h-full w-full" />
+                  </div>
+                )}
+                {activeTab === "docs" && (
+                  <div className="w-full h-full bg-card p-4 overflow-auto">
+                    <h3 className="text-sm font-semibold text-foreground mb-4">
+                      Generated Documentation
+                    </h3>
+                    {outputs.documentation ? (
+                      <div className="prose prose-sm max-w-none">
+                        <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
+                          {outputs.documentation}
+                        </pre>
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground text-sm">
+                        Documentation will appear here once generated.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

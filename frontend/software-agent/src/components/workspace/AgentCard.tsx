@@ -11,6 +11,8 @@ import {
   Bug,
   Users,
   Wrench,
+  Terminal,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,13 +28,15 @@ interface AgentCardProps {
 }
 
 const roleIcons: Record<string, React.ReactNode> = {
-  Planner: <Users className="w-4 h-4" />,
-  Coder: <Code className="w-4 h-4" />,
-  Tester: <FileCheck className="w-4 h-4" />,
-  Debugger: <Bug className="w-4 h-4" />,
-  Reviewer: <AlertTriangle className="w-4 h-4" />,
-  Refiner: <Wrench className="w-4 h-4" />,
-  Manager: <Users className="w-4 h-4" />,
+  "Developer": <Code className="w-5 h-5" />,
+  "QA Engineer": <FileCheck className="w-5 h-5" />,
+  "Auditor": <Users className="w-5 h-5" />,
+  "Refactoring": <Wrench className="w-5 h-5" />,
+  "CLI Testing": <Terminal className="w-5 h-5" />,
+  "Documentation": <FileText className="w-5 h-5" />,
+  "Terminal Analysis": <Bug className="w-5 h-5" />,
+  "Planner": <Users className="w-5 h-5" />,
+  "Manager": <Users className="w-5 h-5" />,
 };
 
 export function AgentCard({
