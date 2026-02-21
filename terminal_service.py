@@ -57,14 +57,14 @@ class TerminalSession:
         This handles the user requirement to show 'only the one-line main exact command'
         and 'real background outputs', hiding the complex implementation details.
         """
-        # Remove the echo of the appended exit logic
-        # Matches: ; Write-Host "__AGENT_DONE__... up to end of line or buffer
-        # We use a broad non-greedy match.
+        # Remove the echo of the appended exit logic from the command line
+        # Matches: ; Write-Host "__AGENT_DONE__... up to end of line
         data = re.sub(r';\s*Write-Host\s+"__AGENT_DONE__.*', '', data)
         
-        # Remove the execution of the marker itself (output)
-        # Matches: __AGENT_DONE__RUN_xxx 0 (or similar exit code)
-        data = re.sub(r'__AGENT_DONE__\w+\s+(-?\d+)?', '', data)
+        # Remove the execution output of the marker itself
+        # Matches: __AGENT_DONE__RUN_xxx <exit_code> and potential trailing newlines
+        # We use strict matching to avoid accidental deletions
+        data = re.sub(r'__AGENT_DONE__RUN_\w+\s+(-?\d+)?\r?\n?', '', data)
         
         return data
 

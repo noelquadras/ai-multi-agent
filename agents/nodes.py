@@ -572,7 +572,13 @@ STRICT OUTPUT RULE:
             "refined_code": refined_code,
             "current_agent": "refiner",
             "messages": state.get("messages", []) + messages + [response],
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            # Increment debug loop count if we were triggered by the analyzer
+            "debug_loop_count": (
+                state.get("debug_loop_count", 0) + 1
+                if "FIX_REQUIRED" in state.get("analysis", "")
+                else state.get("debug_loop_count", 0)
+            ),
         }
     except Exception as e:
         emit_event(state["task_id"], {
@@ -694,6 +700,10 @@ def cli_tester_node(state: AgentState) -> AgentState:
     
     # Use refined code if available, otherwise use generated code
     code_to_test = clean_code_output(state.get("refined_code") or state["generated_code"])
+    
+    # If benchmark test code is provided, append it to the code to test
+    if state.get("benchmark_test_code"):
+        code_to_test += "\n\n" + state["benchmark_test_code"]
     
     # Detect if this is Python code (simple heuristic)
     is_python = not any([
@@ -1001,6 +1011,10 @@ def should_refine_after_analysis(state: AgentState) -> str:
         return "document"
 
     if "FIX_REQUIRED" in analysis:
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"🔄 Analyzer: Fix required — debug loop #{iteration_count}"
+        })
         return "refine"
-    
+
     return "document"

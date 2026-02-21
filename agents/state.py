@@ -19,6 +19,7 @@ class AgentState(TypedDict):
     task_id: str
     model: str  # "ollama" or "groq" (default/fallback)
     agent_models: Optional[dict[str, str]]  # Specific models for each agent
+    benchmark_test_code: Optional[str]  # Optional test code for benchmarking (e.g. HumanEval)
     
     # Agent Outputs
     generated_code: str
@@ -29,9 +30,11 @@ class AgentState(TypedDict):
     test_results: str  # CLI test output summary
     test_output: Optional[dict] # Raw execution results (returncode, stdout, stderr)
     analysis: str # Analyzer's reasoning and instructions
-    
+
     # Metadata
     messages: Annotated[Sequence[BaseMessage], operator.add]
     current_agent: str
     error: Optional[str]
     iteration_count: int
+    debug_loop_count: int  # Number of refine→test→analyze cycles (for telemetry)
+    total_tokens_used: Optional[int]  # Cumulative token count (if backend exposes it)
