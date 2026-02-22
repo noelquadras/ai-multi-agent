@@ -150,6 +150,10 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "iteration_count": 0,
         "debug_loop_count": 0,
         "total_tokens_used": None,
+        # Structured Pydantic outputs
+        "review_report_structured": None,
+        "decision_output": None,
+        "analysis_structured": None,
     }
     
     print(f"\n--- RUNNING LANGGRAPH WORKFLOW (Model: {model}) ---\n", flush=True)
@@ -213,6 +217,10 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "iteration_count": final_state.get("iteration_count", 0),
         "debug_loop_count": final_state.get("debug_loop_count", 0),
         "total_tokens_used": final_state.get("total_tokens_used"),
+        # Structured Pydantic outputs
+        "review_report_structured": final_state.get("review_report_structured"),
+        "decision_output": final_state.get("decision_output"),
+        "analysis_structured": final_state.get("analysis_structured"),
     }
 
     return results

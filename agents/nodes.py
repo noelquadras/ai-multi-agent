@@ -5,10 +5,14 @@ Supports both Ollama (local) and Groq (cloud) LLMs.
 
 import re
 import os
+import json
 from typing import Optional
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_ollama import ChatOllama
 from agents.state import AgentState
+from agents.schemas import ReviewOutput, AnalysisOutput, DecisionOutput
+from agents.termination import DEFAULT_TERMINATION
 from database import emit_event, get_task_status, update_decision_signal, clear_decision_signal, get_rejection_feedback, update_rejection_feedback
 import time
 from tools.executor import execute
@@ -270,8 +274,27 @@ FORBIDDEN:
 # ==========================================
 # NODE 2: CODE REVIEWER
 # ==========================================
+def _format_review_output(review: ReviewOutput) -> str:
+    """Format a ReviewOutput into a human-readable markdown string."""
+    lines = []
+    lines.append(f"### Verdict: {review.verdict}  (Score: {review.overall_score}/10)")
+    if review.critical_issues:
+        lines.append("\n### Critical Issues")
+        for issue in review.critical_issues:
+            lines.append(f"- ❌ {issue}")
+    if review.minor_issues:
+        lines.append("\n### Minor Issues")
+        for issue in review.minor_issues:
+            lines.append(f"- ⚠️ {issue}")
+    if review.fix_suggestions:
+        lines.append("\n### Fix Suggestions")
+        for suggestion in review.fix_suggestions:
+            lines.append(f"- 🔧 {suggestion}")
+    return "\n".join(lines)
+
+
 def code_reviewer_node(state: AgentState) -> AgentState:
-    """Review generated code for issues."""
+    """Review generated code for issues using structured Pydantic output."""
     check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
@@ -284,27 +307,16 @@ def code_reviewer_node(state: AgentState) -> AgentState:
         "message": f"[AGENT_START reviewer]"
     })
     
+    parser = PydanticOutputParser(pydantic_object=ReviewOutput)
+    
     prompt = f"""You are an Expert QA and Security Auditor.
 Review the following code critically:
 
 {state['generated_code']}
 
-You MUST output in exactly this structured format:
+DO NOT write code. DO NOT rewrite the solution.
 
-### Summary
-- Brief overview of code quality (2-3 sentences)
-
-### Detailed Review
-- List specific issues, bugs, or security concerns
-- Mention style or maintainability problems
-- Note any missing error handling
-
-### Final Recommendations
-- Bullet list of concrete improvements the refiner must apply
-
-DO NOT write code.
-DO NOT rewrite the solution.
-DO NOT add extra sections.
+{parser.get_format_instructions()}
 """
     
     messages = [
@@ -313,14 +325,24 @@ DO NOT add extra sections.
     ]
     
     try:
-        # Use local model for review (cheaper)
         llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("reviewer", ""))
         response = llm.invoke(messages)
-        review = response.content
+        
+        # Parse structured output, fall back to raw string
+        review_output_dict = None
+        try:
+            result: ReviewOutput = parser.parse(response.content)
+            review_output_dict = result.model_dump()
+            review = result.model_dump_json(indent=2)  # pretty JSON for SSE display
+        except Exception:
+            # Fallback: LLM didn't produce valid JSON
+            review = response.content
         
         emit_event(state["task_id"], {
             "type": "log",
             "message": f"Review completed: {len(review)} characters"
+                       + (f" (structured, score={review_output_dict['overall_score']})"
+                          if review_output_dict else " (raw)")
         })
         
         emit_event(state["task_id"], {
@@ -336,6 +358,7 @@ DO NOT add extra sections.
         return {
             **state,
             "review_report": review,
+            "review_report_structured": review_output_dict,
             "current_agent": "reviewer",
             "messages": state.get("messages", []) + messages + [response],
             "iteration_count": state.get("iteration_count", 0) + 1
@@ -356,7 +379,13 @@ DO NOT add extra sections.
 # NODE 3: DECISION MAKER
 # ==========================================
 def decision_maker_node(state: AgentState) -> AgentState:
-    """Decide if code needs refinement."""
+    """
+    Decide if code needs refinement.
+    
+    Deterministic path: if structured review data is available, reads
+    review.verdict directly — no LLM call needed.
+    Fallback: calls the LLM only when structured review data is missing.
+    """
     check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
@@ -369,53 +398,71 @@ def decision_maker_node(state: AgentState) -> AgentState:
         "message": f"[AGENT_START decision]"
     })
     
-    prompt = f"""Analyze ONLY the code below:
-
-{state['generated_code']}
-
-Question: Does the code have bugs, security vulnerabilities, or incorrect behavior?
-
-STRICT OUTPUT RULE:
-Output ONLY ONE WORD: YES or NO
-NO punctuation. NO explanation. NO additional text.
-"""
-    
-    messages = [
-        SystemMessage(content="You are a deterministic decision auditor. Output only YES or NO."),
-        HumanMessage(content=prompt)
-    ]
-    
     try:
         # 1. Check for Manual Override Signal (Approve/Reject from UI)
         db_state = get_task_status(state["task_id"])
         decision_signal = db_state.get("decision_signal") if db_state else None
         
+        decision_output_dict = None
+        
         if decision_signal == "APPROVED":
             decision = "NO"
+            rationale = "Human override: APPROVED"
             emit_event(state["task_id"], {
                 "type": "log",
                 "message": "🚦 Human Signal: APPROVED (Skipping Refinement)"
             })
-            # Clear signal
             update_decision_signal(state["task_id"], None)
             
         elif decision_signal == "REJECTED":
             decision = "YES"
+            rationale = "Human override: REJECTED"
             emit_event(state["task_id"], {
                 "type": "log",
                 "message": "🚦 Human Signal: REJECTED (Forcing Refinement)"
             })
-            # Clear signal
             update_decision_signal(state["task_id"], None)
             
+        elif state.get("review_report_structured"):
+            # 2. Deterministic decision from structured review — NO LLM call
+            review = ReviewOutput(**state["review_report_structured"])
+            decision = "YES" if review.verdict == "NEEDS_REFINE" else "NO"
+            rationale = (f"Deterministic: verdict={review.verdict}, "
+                         f"score={review.overall_score}/10, "
+                         f"{len(review.critical_issues)} critical issue(s)")
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"⚡ Deterministic decision from structured review (no LLM call)"
+            })
         else:
-            # 2. Automated Decision (LLM)
-            # Use local model for decision (simple task)
+            # 3. Fallback: LLM decision (only when structured data is unavailable)
+            parser = PydanticOutputParser(pydantic_object=DecisionOutput)
+            prompt = f"""Analyze ONLY the code below:
+
+{state['generated_code']}
+
+Question: Does the code have bugs, security vulnerabilities, or incorrect behavior?
+Answer YES if it needs refinement, NO if it is good enough.
+
+{parser.get_format_instructions()}
+"""
+            messages = [
+                SystemMessage(content="You are a deterministic decision auditor."),
+                HumanMessage(content=prompt)
+            ]
             llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("decision", ""))
             response = llm.invoke(messages)
-            decision = response.content.strip().upper()
+            
+            try:
+                result: DecisionOutput = parser.parse(response.content)
+                decision = result.decision
+                rationale = result.rationale
+                decision_output_dict = result.model_dump()
+            except Exception:
+                decision = response.content.strip().upper()
+                rationale = "Parsed from raw LLM output"
         
-        # Ensure it's YES or NO
+        # Normalise to YES / NO
         if "YES" in decision:
             decision = "YES"
         elif "NO" in decision:
@@ -423,9 +470,16 @@ NO punctuation. NO explanation. NO additional text.
         else:
             decision = "YES"  # Default to refinement if unclear
         
+        # Build decision_output_dict if not already set
+        if decision_output_dict is None:
+            decision_output_dict = DecisionOutput(
+                decision=decision,
+                rationale=rationale
+            ).model_dump()
+        
         emit_event(state["task_id"], {
             "type": "log",
-            "message": f"Decision: {decision}"
+            "message": f"Decision: {decision} — {rationale}"
         })
         
         emit_event(state["task_id"], {
@@ -441,8 +495,9 @@ NO punctuation. NO explanation. NO additional text.
         return {
             **state,
             "decision": decision,
+            "decision_output": decision_output_dict,
             "current_agent": "decision",
-            "messages": state.get("messages", []) + messages + [response],
+            "messages": state.get("messages", []),
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -492,19 +547,46 @@ IMPORTANT: The user has explicitly rejected the previous code. Address their fee
         # Clear feedback after reading
         update_rejection_feedback(state["task_id"], None)
     
+    # Build review section — prefer structured output if available
+    review_section = ""
+    ro = state.get("review_report_structured")
+    if ro:
+        parts = [f"Verdict: {ro['verdict']}  (Score: {ro['overall_score']}/10)"]
+        if ro.get("critical_issues"):
+            parts.append("Critical Issues:\n" + "\n".join(f"  - {i}" for i in ro["critical_issues"]))
+        if ro.get("fix_suggestions"):
+            parts.append("Fix Suggestions:\n" + "\n".join(f"  - {s}" for s in ro["fix_suggestions"]))
+        review_section = "\n".join(parts)
+    else:
+        review_section = state["review_report"]
+
+    # Build analysis section — prefer structured output if available
+    analysis_section = ""
+    ao = state.get("analysis_structured")
+    if ao:
+        parts = [f"Verdict: {ao['verdict']}"]
+        if ao["verdict"] == "FIX_REQUIRED":
+            parts.append(f"Error Type: {ao['error_type']}")
+            parts.append(f"Root Cause: {ao['root_cause']}")
+            if ao.get("fix_hints"):
+                parts.append("Fix Hints:\n" + "\n".join(f"  - {h}" for h in ao["fix_hints"]))
+        analysis_section = "\n".join(parts)
+    else:
+        analysis_section = state.get("analysis", "No analysis available.")
+
     prompt = f"""You are a Code Refiner specializing in fixing bugs and applying improvements.
 
 Original Code:
 {state['generated_code']}
 
 Review Feedback:
-{state['review_report']}
+{review_section}
 
 CLI Test Results (if any):
 {state.get('test_results', 'No test results available.')}
 
 Analyzer Feedback (if any):
-{state.get('analysis', 'No analysis available.')}
+{analysis_section}
 {feedback_section}
 Your task:
 1. Read the original code
@@ -856,11 +938,18 @@ def should_refine(state: AgentState) -> str:
     """
     Determine next node based on decision.
     
+    Reads the structured decision_output if available, otherwise
+    falls back to the raw decision string.
+    
     Returns:
         "refine" if code needs refinement
         "document" if code is good enough to skip refinement
     """
-    decision = state.get("decision", "NO").upper()
+    do = state.get("decision_output")
+    if do:
+        decision = do.get("decision", "NO")
+    else:
+        decision = state.get("decision", "NO").upper()
     
     if "YES" in decision:
         emit_event(state["task_id"], {
@@ -882,7 +971,7 @@ def should_refine(state: AgentState) -> str:
 def terminal_analyzer_node(state: AgentState) -> AgentState:
     """
     Analyze the raw terminal output to determine if code needs refinement
-    and what specific fixes are required.
+    and what specific fixes are required.  Uses structured Pydantic output.
     """
     check_interrupts(state["task_id"])
     
@@ -902,8 +991,11 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
     stderr = test_output.get("stderr", "")
     traceback = test_output.get("traceback", "")
     
-    # If successful, skip analysis
+    # If successful, skip analysis — return structured PASS immediately
     if returncode == 0 and not traceback:
+        pass_output = AnalysisOutput(
+            verdict="PASS", error_type="none", root_cause="", fix_hints=[]
+        )
         emit_event(state["task_id"], {
             "type": "log",
             "message": "✅ Analyzer: Code executed successfully. No fix needed."
@@ -911,11 +1003,14 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
         return {
             **state,
             "analysis": "PASS",
-            "decision": "NO", # Override decision to NO if tests passed
+            "analysis_structured": pass_output.model_dump(),
+            "decision": "NO",
             "current_agent": "analyzer"
         }
     
-    # Analyze the error
+    # Analyze the error with structured output
+    parser = PydanticOutputParser(pydantic_object=AnalysisOutput)
+    
     prompt = f"""You are a Python Debugging Expert.
     
 The code executed but failed with the following output:
@@ -932,18 +1027,8 @@ TRACEBACK:
 {traceback}
 
 Analyze the error carefully.
-1. Identify the root cause (SyntaxError, logic error, missing dependency, etc.).
-2. Formulate a specific fix strategy.
 
-STRICT OUTPUT FORMAT:
-If the error is trivial or the code actually worked but printed to stderr (e.g. warnings):
-PASS
-
-If a fix is required, output:
-FIX_REQUIRED: [Detailed explanation of the fix]
-
-Example:
-FIX_REQUIRED: The code failed with a ZeroDivisionError. Add a try/except block around the division operation to handle this case.
+{parser.get_format_instructions()}
 """
 
     messages = [
@@ -952,10 +1037,18 @@ FIX_REQUIRED: The code failed with a ZeroDivisionError. Add a try/except block a
     ]
     
     try:
-        # Use heavier model for analysis
         llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("analyzer", ""))
         response = llm.invoke(messages)
-        analysis = response.content.strip()
+        
+        # Parse structured output, fall back to raw string
+        analysis_output_dict = None
+        try:
+            result: AnalysisOutput = parser.parse(response.content)
+            analysis = f"{result.verdict}: {result.root_cause}" if result.verdict == "FIX_REQUIRED" else "PASS"
+            analysis_output_dict = result.model_dump()
+        except Exception:
+            # Fallback: LLM didn't produce valid JSON
+            analysis = response.content.strip()
         
         emit_event(state["task_id"], {
             "type": "log",
@@ -975,8 +1068,9 @@ FIX_REQUIRED: The code failed with a ZeroDivisionError. Add a try/except block a
         return {
             **state,
             "analysis": analysis,
+            "analysis_structured": analysis_output_dict,
             "current_agent": "analyzer",
-             "messages": state.get("messages", []) + messages + [response]
+            "messages": state.get("messages", []) + messages + [response]
         }
         
     except Exception as e:
@@ -984,9 +1078,16 @@ FIX_REQUIRED: The code failed with a ZeroDivisionError. Add a try/except block a
             "type": "system_error",
             "error": f"Analysis failed: {str(e)}"
         })
+        fallback_output = AnalysisOutput(
+            verdict="FIX_REQUIRED",
+            error_type="runtime",
+            root_cause="Analyzer failed, please check logs manually.",
+            fix_hints=[]
+        )
         return {
             **state,
             "analysis": "FIX_REQUIRED: Analyzer failed, please check logs manually.",
+            "analysis_structured": fallback_output.model_dump(),
             "error": str(e),
             "current_agent": "analyzer"
         }
@@ -997,23 +1098,31 @@ FIX_REQUIRED: The code failed with a ZeroDivisionError. Add a try/except block a
 # ==========================================
 def should_refine_after_analysis(state: AgentState) -> str:
     """
-    Decide based on the Analyzer's output.
+    Decide based on the Analyzer's output and composable termination conditions.
+    
+    Uses DEFAULT_TERMINATION (iteration limit, token budget, debug loop limit)
+    to guard against runaway loops before checking the analysis verdict.
     """
-    analysis = state.get("analysis", "")
-    iteration_count = state.get("iteration_count", 0)
-
-    # If too many iterations, force stop to prevent infinite loops
-    if iteration_count >= 15:
+    # Check all termination conditions (iteration, token budget, debug loops)
+    term_result = DEFAULT_TERMINATION(state)
+    if term_result.should_stop:
         emit_event(state["task_id"], {
             "type": "log",
-            "message": "🛑 Max iterations reached. Stopping."
+            "message": f"🛑 Stopping: {term_result.reason}"
         })
         return "document"
 
-    if "FIX_REQUIRED" in analysis:
+    # Prefer structured output
+    ao = state.get("analysis_structured")
+    if ao:
+        needs_fix = ao.get("verdict") == "FIX_REQUIRED"
+    else:
+        needs_fix = "FIX_REQUIRED" in state.get("analysis", "")
+
+    if needs_fix:
         emit_event(state["task_id"], {
             "type": "log",
-            "message": f"🔄 Analyzer: Fix required — debug loop #{iteration_count}"
+            "message": f"🔄 Analyzer: Fix required — debug loop #{state.get('debug_loop_count', 0)}"
         })
         return "refine"
 

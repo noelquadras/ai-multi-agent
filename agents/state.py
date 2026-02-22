@@ -31,6 +31,11 @@ class AgentState(TypedDict):
     test_output: Optional[dict] # Raw execution results (returncode, stdout, stderr)
     analysis: str # Analyzer's reasoning and instructions
 
+    # Structured outputs (Pydantic model_dump dicts)
+    review_report_structured: Optional[dict]    # ReviewOutput dict
+    decision_output: Optional[dict]   # Serialised DecisionOutput
+    analysis_structured: Optional[dict]         # AnalysisOutput dict
+
     # Metadata
     messages: Annotated[Sequence[BaseMessage], operator.add]
     current_agent: str
