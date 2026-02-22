@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from agents.state import AgentState
 from agents.nodes import (
+    spec_writer_node,
     code_generator_node,
     code_reviewer_node,
     decision_maker_node,
@@ -44,9 +45,9 @@ def create_agent_graph(include_cli_test: bool = True):
     Create the LangGraph state graph for the agent workflow.
     
     Graph structure:
-        START → generate → review → decide → [conditional] → test → document → END
-                                              ↓
-                                           refine → test → document
+        START → spec_writer → generate → review → decide → [conditional] → test → document → END
+                                                            ↓
+                                                         refine → test → document
     
     Args:
         include_cli_test: Whether to include CLI testing node (patent feature)
@@ -55,6 +56,7 @@ def create_agent_graph(include_cli_test: bool = True):
     workflow = StateGraph(AgentState)
     
     # Add nodes (each agent is a node)
+    workflow.add_node("spec_writer", spec_writer_node)
     workflow.add_node("generate", code_generator_node)
     workflow.add_node("review", code_reviewer_node)
     workflow.add_node("decide", decision_maker_node)
@@ -66,9 +68,10 @@ def create_agent_graph(include_cli_test: bool = True):
         workflow.add_node("analyze_test", terminal_analyzer_node)
     
     # Define edges (workflow connections)
-    workflow.set_entry_point("generate")
+    workflow.set_entry_point("spec_writer")
     
     # Sequential flow
+    workflow.add_edge("spec_writer", "generate")
     workflow.add_edge("generate", "review")
     workflow.add_edge("review", "decide")
     
@@ -150,6 +153,9 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "iteration_count": 0,
         "debug_loop_count": 0,
         "total_tokens_used": None,
+        # Spec writer output
+        "spec_doc_path": None,
+        "spec_structured": None,
         # Structured Pydantic outputs
         "review_report_structured": None,
         "decision_output": None,
@@ -218,6 +224,8 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "debug_loop_count": final_state.get("debug_loop_count", 0),
         "total_tokens_used": final_state.get("total_tokens_used"),
         # Structured Pydantic outputs
+        "spec_structured": final_state.get("spec_structured"),
+        "spec_doc_path": final_state.get("spec_doc_path"),
         "review_report_structured": final_state.get("review_report_structured"),
         "decision_output": final_state.get("decision_output"),
         "analysis_structured": final_state.get("analysis_structured"),

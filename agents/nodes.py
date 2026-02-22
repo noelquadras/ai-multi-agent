@@ -12,6 +12,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_ollama import ChatOllama
 from agents.state import AgentState
 from agents.schemas import ReviewOutput, AnalysisOutput, DecisionOutput
+from agents.spec_schema import SpecOutput
 from agents.termination import DEFAULT_TERMINATION
 from database import emit_event, get_task_status, update_decision_signal, clear_decision_signal, get_rejection_feedback, update_rejection_feedback
 import time
@@ -175,10 +176,116 @@ def clean_code_output(text: str) -> str:
 
 
 # ==========================================
+# NODE 0: SPEC WRITER (MetaGPT artifact-first)
+# ==========================================
+def spec_writer_node(state: AgentState) -> AgentState:
+    """
+    Produce a technical spec BEFORE code generation.
+    
+    Gives the code generator explicit architectural direction instead of
+    letting the LLM invent everything from a raw requirements string.
+    Persists the spec to disk (MetaGPT artifact-first pattern).
+    """
+    check_interrupts(state["task_id"])
+    
+    emit_event(state["task_id"], {
+        "type": "agent_start",
+        "agent": "spec_writer"
+    })
+    
+    emit_event(state["task_id"], {
+        "type": "log",
+        "message": "[AGENT_START spec_writer]"
+    })
+    
+    parser = PydanticOutputParser(pydantic_object=SpecOutput)
+    
+    prompt = f"""You are a Senior Software Architect.
+Given the requirements below, produce a concise technical specification.
+
+Requirements:
+{state['requirements']}
+
+The spec must cover:
+1. Implementation approach — what strategy, libraries, and patterns to use
+2. File list — always ["solution.py"] for a single-file solution
+3. Class/function design — plain-English outline of the key abstractions
+4. Key edge cases — things the implementation MUST handle
+5. Complexity estimate — "simple", "medium", or "complex"
+
+{parser.get_format_instructions()}
+"""
+    
+    messages = [
+        SystemMessage(content="You are a software architect who writes concise, actionable technical specs."),
+        HumanMessage(content=prompt)
+    ]
+    
+    try:
+        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("spec_writer", ""))
+        response = llm.invoke(messages)
+        
+        spec_structured = None
+        spec_doc_path = None
+        try:
+            spec: SpecOutput = parser.parse(response.content)
+            spec_structured = spec.model_dump()
+            
+            # Persist to disk (MetaGPT artifact-first pattern)
+            from pathlib import Path
+            spec_path = Path(f"tasks/{state['task_id']}/spec/design.json")
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(spec.model_dump_json(indent=2))
+            spec_doc_path = str(spec_path)
+            
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"Spec written: {spec.complexity_estimate} complexity, "
+                           f"{len(spec.key_edge_cases)} edge cases identified"
+            })
+        except Exception as parse_err:
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"Spec parse failed, continuing without structured spec: {parse_err}"
+            })
+        
+        emit_event(state["task_id"], {
+            "type": "agent_end",
+            "agent": "spec_writer"
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "[AGENT_END spec_writer]"
+        })
+        
+        return {
+            **state,
+            "spec_doc_path": spec_doc_path,
+            "spec_structured": spec_structured,
+            "current_agent": "spec_writer",
+            "messages": state.get("messages", []) + messages + [response],
+        }
+    except Exception as e:
+        emit_event(state["task_id"], {
+            "type": "system_error",
+            "error": f"Spec writer failed: {str(e)}"
+        })
+        # Non-fatal — downstream generate will still work without a spec
+        return {
+            **state,
+            "spec_doc_path": None,
+            "spec_structured": None,
+            "error": str(e),
+            "current_agent": "spec_writer"
+        }
+
+
+# ==========================================
 # NODE 1: CODE GENERATOR
 # ==========================================
 def code_generator_node(state: AgentState) -> AgentState:
-    """Generate initial code based on requirements."""
+    """Generate initial code based on requirements and optional spec."""
     check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
@@ -192,10 +299,22 @@ def code_generator_node(state: AgentState) -> AgentState:
         "message": f"[AGENT_START coder] (using {model_name})"
     })
     
+    # Build spec section if available
+    spec_section = ""
+    if state.get("spec_structured"):
+        spec = SpecOutput(**state["spec_structured"])
+        spec_section = f"""\n--- TECHNICAL SPEC (follow this!) ---
+- Approach: {spec.implementation_approach}
+- Classes/Functions: {spec.class_design}
+- Must handle: {', '.join(spec.key_edge_cases)}
+- Complexity: {spec.complexity_estimate}
+---"""
+    
     prompt = f"""You are a Senior Software Developer.
 Generate complete, runnable PYTHON code for the following requirements:
 
 {state['requirements']}
+{spec_section}
 
 CRITICAL OUTPUT FORMAT:
 ```python
@@ -211,6 +330,7 @@ STRICT RULES:
 - MUST be Python 3.11+ compatible
 - DO NOT use input(), open(), or file I/O (sandbox restrictions)
 - Use print() to show output
+- Do NOT leave TODOs or placeholder comments
 
 FORBIDDEN:
 ❌ "Here's a solution..."

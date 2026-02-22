@@ -31,6 +31,10 @@ class AgentState(TypedDict):
     test_output: Optional[dict] # Raw execution results (returncode, stdout, stderr)
     analysis: str # Analyzer's reasoning and instructions
 
+    # Spec writer output (MetaGPT artifact-first pattern)
+    spec_doc_path: Optional[str]       # Path to persisted spec JSON
+    spec_structured: Optional[dict]    # SpecOutput dict
+
     # Structured outputs (Pydantic model_dump dicts)
     review_report_structured: Optional[dict]    # ReviewOutput dict
     decision_output: Optional[dict]   # Serialised DecisionOutput
