@@ -20,3 +20,5 @@ httpx  # For async HTTP calls to Convex
 # Utilities
 cors
 email-validator
+pywinpty
+websockets

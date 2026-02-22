@@ -5,10 +5,16 @@ import { useSearchParams } from "next/navigation";
 import { AgentPanel } from "@/components/workspace/AgentPanel";
 import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
-import { PreviewPanel } from "@/components/workspace/PreviewPanel";
 import { CLIPanel } from "@/components/workspace/CLIPanel";
+import { RejectModal } from "@/components/workspace/RejectModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import dynamic from "next/dynamic";
+
+const TerminalComponent = dynamic(
+  () => import("@/components/Terminal").then((mod) => mod.Terminal),
+  { ssr: false }
+);
 import {
   RefreshCw,
   Pause,
@@ -16,9 +22,12 @@ import {
   Check,
   X,
   Terminal,
-  Eye,
   FileText,
+  History,
+  Activity,
 } from "lucide-react";
+import { HistorySidebar } from "@/components/HistorySidebar";
+import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 
 /* =========================
    TYPES
@@ -47,7 +56,7 @@ interface TaskOutputs {
   testResults: string;
 }
 
-type SidePanel = "preview" | "cli" | "docs";
+type SidePanel = "cli" | "docs" | "terminal";
 
 /* =========================
    COMPONENT
@@ -70,7 +79,10 @@ export default function WorkspacePage() {
     testResults: "",
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
-  const [sidePanel, setSidePanel] = useState<SidePanel>("preview");
+  const [activeTab, setActiveTab] = useState<SidePanel>("cli");
+  const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli" | "docs">("activity");
+  const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -121,6 +133,13 @@ export default function WorkspacePage() {
       status: "idle",
       progress: 0,
     },
+    analyzer: {
+      id: "analyzer",
+      name: "Analyzer",
+      role: "Terminal Analysis",
+      status: "idle",
+      progress: 0,
+    },
   };
 
   /* =========================
@@ -155,26 +174,45 @@ export default function WorkspacePage() {
 
     if (event.type === "code_output" && event.code) {
       setOutputs((prev) => ({ ...prev, code: event.code }));
+      setRightActiveTab("activity");
     }
     if (event.type === "review_output" && event.review) {
       setOutputs((prev) => ({ ...prev, review: event.review }));
+      setRightActiveTab("activity");
     }
     if (event.type === "decision_output" && event.decision) {
       setOutputs((prev) => ({ ...prev, decision: event.decision }));
+      setRightActiveTab("activity");
     }
     if (event.type === "doc_output" && event.documentation) {
       setOutputs((prev) => ({ ...prev, documentation: event.documentation }));
+      setRightActiveTab("docs");
     }
     if (event.type === "test_output" && event.results) {
       setOutputs((prev) => ({ ...prev, testResults: event.results }));
+      setRightActiveTab("cli");
     }
     if (event.type === "cli_output" && event.message) {
       setCliLogs((prev) => [...prev, event.message]);
+      setRightActiveTab("cli");
     }
 
-    if (event.type === "task_completed") setTaskStatus("completed");
-    if (event.type === "task_paused") setTaskStatus("paused");
-    if (event.type === "task_resumed") setTaskStatus("running");
+    if (["agent_start", "agent_end", "tool_start", "tool_error", "system_error", "human_approval"].includes(event.type)) {
+      setRightActiveTab("activity");
+    }
+
+    if (event.type === "task_completed") {
+      setTaskStatus("completed");
+      setRightActiveTab("activity");
+    }
+    if (event.type === "task_paused") {
+      setTaskStatus("paused");
+      setRightActiveTab("activity");
+    }
+    if (event.type === "task_resumed") {
+      setTaskStatus("running");
+      setRightActiveTab("activity");
+    }
   };
 
   /* =========================
@@ -258,11 +296,24 @@ export default function WorkspacePage() {
     });
   };
 
-  const handleReject = async () => {
+  const handleReject = async (feedback: string) => {
     if (!taskId) return;
     await fetch(`http://localhost:8000/api/task/${taskId}/reject`, {
       method: "POST",
     });
+
+    // Call regenerate endpoint which creates a new task with feedback
+    const response = await fetch(`http://localhost:8000/api/task/${taskId}/regenerate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feedback }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      // Redirect to the new task
+      window.location.href = `/workspace?taskId=${data.task_id}`;
+    }
   };
 
   /* =========================
@@ -293,162 +344,171 @@ export default function WorkspacePage() {
   };
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
-      <div className="hidden md:block flex-none">
-        <AgentPanel agents={agents} />
-      </div>
-
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
-          <div className="flex items-center gap-3">
-            <Badge className={getStatusColor()}>
-              {taskStatus.toUpperCase()}
-            </Badge>
-            <Badge
-              variant="outline"
-              className="border-border text-muted-foreground text-xs"
-            >
-              {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
-            </Badge>
+    <SidebarProvider>
+      <HistorySidebar />
+      <SidebarInset>
+        <div className="flex h-screen bg-background overflow-hidden">
+          <div className="hidden md:block flex-none">
+            <AgentPanel agents={agents} />
           </div>
 
-          <div className="flex items-center gap-2">
-            {taskStatus === "running" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handlePause}
-                className="text-yellow-500 hover:text-yellow-600"
-              >
-                <Pause className="w-4 h-4 mr-1" /> Pause
-              </Button>
-            )}
-            {taskStatus === "paused" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleResume}
-                className="text-green-500 hover:text-green-600"
-              >
-                <Play className="w-4 h-4 mr-1" /> Resume
-              </Button>
-            )}
-            <div className="w-px h-6 bg-border mx-2" />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleApprove}
-              disabled={!outputs.code}
-              className="text-green-500 disabled:opacity-50"
-            >
-              <Check className="w-4 h-4 mr-1" /> Approve
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleReject}
-              disabled={!outputs.code}
-              className="text-red-500 disabled:opacity-50"
-            >
-              <X className="w-4 h-4 mr-1" /> Reject
-            </Button>
-            <div className="w-px h-6 bg-border mx-2" />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => taskId && refreshStatus(taskId)}
-              className="text-muted-foreground"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
+              <div className="flex items-center gap-3">
+                <SidebarTrigger />
+                <Badge className={getStatusColor()}>
+                  {taskStatus.toUpperCase()}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-border text-muted-foreground text-xs"
+                >
+                  {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
+                </Badge>
+              </div>
 
-        <div className="flex flex-1 overflow-hidden">
-          <div className="flex-1 overflow-hidden">
-            <CodeWorkspace code={outputs.code} isReadOnly />
-          </div>
-
-          <div className="hidden xl:flex flex-col border-l border-border">
-            <div className="flex border-b border-border bg-card">
-              <button
-                onClick={() => setSidePanel("preview")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${
-                  sidePanel === "preview"
-                    ? "bg-muted text-foreground border-b-2 border-purple-500"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Eye className="w-4 h-4" /> Preview
-              </button>
-              <button
-                onClick={() => setSidePanel("cli")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${
-                  sidePanel === "cli"
-                    ? "bg-muted text-foreground border-b-2 border-green-500"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Terminal className="w-4 h-4" /> CLI Tests
-                {cliLogs.length > 0 && (
-                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <div className="flex items-center gap-2">
+                {(taskStatus === "running" || taskStatus === "pending") && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePause}
+                    className="text-yellow-500 hover:text-yellow-600"
+                  >
+                    <Pause className="w-4 h-4 mr-1" /> Pause
+                  </Button>
                 )}
-              </button>
-              <button
-                onClick={() => setSidePanel("docs")}
-                className={`flex items-center gap-2 px-4 py-2 text-sm ${
-                  sidePanel === "docs"
-                    ? "bg-muted text-foreground border-b-2 border-blue-500"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <FileText className="w-4 h-4" /> Docs
-              </button>
+                {taskStatus === "paused" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleResume}
+                    className="text-green-500 hover:text-green-600"
+                  >
+                    <Play className="w-4 h-4 mr-1" /> Resume
+                  </Button>
+                )}
+                <div className="w-px h-6 bg-border mx-2" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleApprove}
+                  disabled={!outputs.code}
+                  className="text-green-500 disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4 mr-1" /> Approve
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsRejectModalOpen(true)}
+                  disabled={!outputs.code}
+                  className="text-red-500 disabled:opacity-50"
+                >
+                  <X className="w-4 h-4 mr-1" /> Reject
+                </Button>
+                <div className="w-px h-6 bg-border mx-2" />
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => taskId && refreshStatus(taskId)}
+                  className="text-muted-foreground"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
 
-            <div className="flex-1 overflow-hidden">
-              {sidePanel === "preview" && (
-                <PreviewPanel
-                  taskStatus={{
-                    status: taskStatus,
-                    result: {
-                      refined_code: outputs.code,
-                      generated_code: outputs.code,
-                      documentation: outputs.documentation,
-                      review_report: outputs.review,
-                    },
-                  }}
-                />
-              )}
-              {sidePanel === "cli" && (
-                <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
-              )}
-              {sidePanel === "docs" && (
-                <div className="w-[400px] h-full bg-card p-4 overflow-auto">
-                  <h3 className="text-sm font-semibold text-foreground mb-4">
-                    Generated Documentation
-                  </h3>
-                  {outputs.documentation ? (
-                    <div className="prose prose-sm max-w-none">
-                      <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
-                        {outputs.documentation}
-                      </pre>
+            <div className="flex flex-1 overflow-hidden">
+              <div className="flex-1 overflow-hidden">
+                <CodeWorkspace code={outputs.code} isReadOnly />
+              </div>
+
+              <div className="hidden xl:flex flex-col border-l border-border w-[450px]">
+                <div className="flex border-b border-border bg-card">
+                  <button
+                    onClick={() => setRightActiveTab("activity")}
+                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "activity"
+                      ? "bg-muted text-foreground border-b-2 border-purple-500"
+                      : "text-muted-foreground hover:text-foreground"
+                      }`}
+                  >
+                    <Activity className="w-3.5 h-3.5" /> Activity
+                  </button>
+                  <button
+                    onClick={() => setRightActiveTab("cli")}
+                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "cli"
+                      ? "bg-muted text-foreground border-b-2 border-green-500"
+                      : "text-muted-foreground hover:text-foreground"
+                      }`}
+                  >
+                    <Terminal className="w-3.5 h-3.5" /> CLI Tests
+                    {cliLogs.length > 0 && (
+                      <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setRightActiveTab("docs")}
+                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "docs"
+                      ? "bg-muted text-foreground border-b-2 border-blue-500"
+                      : "text-muted-foreground hover:text-foreground"
+                      }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" /> Docs
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden relative">
+                  {rightActiveTab === "activity" && (
+                    <ActivityPanel events={events} />
+                  )}
+                  {rightActiveTab === "cli" && (
+                    <div className="absolute inset-0 overflow-hidden">
+                      <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
                     </div>
-                  ) : (
-                    <p className="text-muted-foreground text-sm">
-                      Documentation will appear here once generated.
-                    </p>
+                  )}
+                  {rightActiveTab === "docs" && (
+                    <div className="absolute inset-0 overflow-auto bg-card p-4">
+                      <h3 className="text-sm font-semibold text-foreground mb-4">
+                        Generated Documentation
+                      </h3>
+                      {outputs.documentation ? (
+                        <div className="prose prose-sm max-w-none">
+                          <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
+                            {outputs.documentation}
+                          </pre>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground text-xs">
+                          Documentation will appear here once generated.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              </div>
+            </div>
+
+            <div className="h-72 border-t border-border overflow-hidden flex flex-col">
+              <div className="flex border-b border-border bg-card px-4 py-2">
+                <div className="flex items-center gap-2 text-sm text-foreground font-medium">
+                  <Terminal className="w-4 h-4" /> Terminal
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-hidden bg-[#1a1b26]">
+                <TerminalComponent className="h-full w-full" />
+              </div>
             </div>
           </div>
         </div>
-
-        <div className="h-72 border-t border-border overflow-hidden">
-          <ActivityPanel events={events} />
-        </div>
-      </div>
-    </div>
+      </SidebarInset>
+      <RejectModal
+        isOpen={isRejectModalOpen}
+        onClose={() => setIsRejectModalOpen(false)}
+        onSubmit={handleReject}
+      />
+    </SidebarProvider >
   );
 }
+

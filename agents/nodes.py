@@ -9,7 +9,8 @@ from typing import Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from agents.state import AgentState
-from app import emit_event
+from database import emit_event, get_task_status, update_decision_signal, clear_decision_signal, get_rejection_feedback, update_rejection_feedback
+import time
 from tools.executor import execute
 
 # ===========================================
@@ -25,14 +26,49 @@ _groq_api_key = ""
 
 def get_ollama_llm():
     """Get or create Ollama LLM instance."""
-    global _ollama_llm
-    if _ollama_llm is None:
+    global _ollama_llm, _current_model
+    
+    # Determine model name
+    # If _current_model is "ollama" (generic) or "groq", fallback to default
+    # Otherwise use the specific model name provided (e.g. "llama3:latest")
+    model_name = "mistral:7b-instruct"
+    if _current_model and _current_model not in ["ollama", "groq"]:
+        model_name = _current_model
+        
+    # Re-initialize if model changed or not initialized
+    if _ollama_llm is None or getattr(_ollama_llm, "model", "") != model_name:
+        print(f"Initializing Ollama with model: {model_name}")
         _ollama_llm = ChatOllama(
-            model="mistral:7b-instruct",
+            model=model_name,
             base_url="http://localhost:11434",
             temperature=0.7
         )
+
     return _ollama_llm
+
+
+def check_interrupts(task_id: str):
+    """
+    Checks DB for pause status and waits if paused.
+    To be called at the start of every node.
+    """
+    while True:
+        state = get_task_status(task_id)
+        if not state:
+            break
+        
+        status = state.get("status")
+        if status == "paused":
+            # Just wait
+            time.sleep(1)
+            continue
+        
+        if status == "failed" or status == "completed":
+            # Stop processing
+            raise Exception(f"Task stopped with status: {status}")
+            
+        break
+
 
 
 def get_groq_llm():
@@ -65,14 +101,33 @@ def set_model_config(model: str, groq_api_key: str = ""):
         get_groq_llm()  # Initialize immediately
 
 
-def get_llm(for_heavy_task: bool = False):
+def get_llm(for_heavy_task: bool = False, override_model: str = ""):
     """
     Get the appropriate LLM based on configuration and task type.
     
     Args:
         for_heavy_task: If True, use the heavy-duty model (Groq for code gen).
                        If False, can use lighter model for simple tasks.
+        override_model: If provided, specific model ID to use.
     """
+    # 1. Use override model if provided
+    if override_model:
+        if "groq" in override_model.lower() or "llama" in override_model.lower():
+            # It's likely a cloud/groq model
+             if _groq_api_key:
+                from langchain_groq import ChatGroq
+                # Use the specific model name if possible, or fallback to default groq
+                model_name = "llama-3.3-70b-versatile"
+                return ChatGroq(model=model_name, api_key=_groq_api_key, temperature=0.7)
+        
+        # Assume it's a local Ollama model
+        return ChatOllama(
+            model=override_model,
+            base_url="http://localhost:11434",
+            temperature=0.7
+        )
+
+    # 2. Fallback to global default logic
     if _current_model == "groq" and for_heavy_task:
         return get_groq_llm()
     return get_ollama_llm()
@@ -120,6 +175,7 @@ def clean_code_output(text: str) -> str:
 # ==========================================
 def code_generator_node(state: AgentState) -> AgentState:
     """Generate initial code based on requirements."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -166,13 +222,20 @@ FORBIDDEN:
     
     try:
         # Use heavy-duty model for code generation
-        llm = get_llm(for_heavy_task=True)
+        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("coder", ""))
         response = llm.invoke(messages)
         code = response.content
         
         emit_event(state["task_id"], {
             "type": "log",
             "message": f"Generated {len(code)} characters of code"
+        })
+        
+        # EMIT GENERATED CODE FOR FRONTEND PREVIEW
+        emit_event(state["task_id"], {
+            "type": "code_output",
+            "agent": "coder",
+            "code": clean_code_output(code)
         })
         
         emit_event(state["task_id"], {
@@ -209,6 +272,7 @@ FORBIDDEN:
 # ==========================================
 def code_reviewer_node(state: AgentState) -> AgentState:
     """Review generated code for issues."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -250,7 +314,7 @@ DO NOT add extra sections.
     
     try:
         # Use local model for review (cheaper)
-        llm = get_llm(for_heavy_task=False)
+        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("reviewer", ""))
         response = llm.invoke(messages)
         review = response.content
         
@@ -293,6 +357,7 @@ DO NOT add extra sections.
 # ==========================================
 def decision_maker_node(state: AgentState) -> AgentState:
     """Decide if code needs refinement."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -321,10 +386,34 @@ NO punctuation. NO explanation. NO additional text.
     ]
     
     try:
-        # Use local model for decision (simple task)
-        llm = get_llm(for_heavy_task=False)
-        response = llm.invoke(messages)
-        decision = response.content.strip().upper()
+        # 1. Check for Manual Override Signal (Approve/Reject from UI)
+        db_state = get_task_status(state["task_id"])
+        decision_signal = db_state.get("decision_signal") if db_state else None
+        
+        if decision_signal == "APPROVED":
+            decision = "NO"
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": "🚦 Human Signal: APPROVED (Skipping Refinement)"
+            })
+            # Clear signal
+            update_decision_signal(state["task_id"], None)
+            
+        elif decision_signal == "REJECTED":
+            decision = "YES"
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": "🚦 Human Signal: REJECTED (Forcing Refinement)"
+            })
+            # Clear signal
+            update_decision_signal(state["task_id"], None)
+            
+        else:
+            # 2. Automated Decision (LLM)
+            # Use local model for decision (simple task)
+            llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("decision", ""))
+            response = llm.invoke(messages)
+            decision = response.content.strip().upper()
         
         # Ensure it's YES or NO
         if "YES" in decision:
@@ -374,6 +463,7 @@ NO punctuation. NO explanation. NO additional text.
 # ==========================================
 def code_refiner_node(state: AgentState) -> AgentState:
     """Refine code based on review feedback."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -384,6 +474,23 @@ def code_refiner_node(state: AgentState) -> AgentState:
         "type": "log",
         "message": f"[AGENT_START refiner]"
     })
+    
+    # Get user rejection feedback if any
+    user_feedback = get_rejection_feedback(state["task_id"])
+    feedback_section = ""
+    if user_feedback:
+        feedback_section = f"""
+User Rejection Feedback:
+{user_feedback}
+
+IMPORTANT: The user has explicitly rejected the previous code. Address their feedback above as your top priority.
+"""
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"📝 User feedback received: {user_feedback[:100]}..."
+        })
+        # Clear feedback after reading
+        update_rejection_feedback(state["task_id"], None)
     
     prompt = f"""You are a Code Refiner specializing in fixing bugs and applying improvements.
 
@@ -396,11 +503,15 @@ Review Feedback:
 CLI Test Results (if any):
 {state.get('test_results', 'No test results available.')}
 
+Analyzer Feedback (if any):
+{state.get('analysis', 'No analysis available.')}
+{feedback_section}
 Your task:
 1. Read the original code
 2. Read the review feedback carefully
 3. Fix bugs identified in the Review Feedback AND any errors shown in the CLI Test Results.
-4. Output ONLY the corrected code in a single code block
+4. If user feedback is provided, address it as the TOP priority.
+5. Output ONLY the corrected code in a single code block
 
 STRICT OUTPUT RULE:
 - Output ONLY a single fenced code block
@@ -416,7 +527,7 @@ STRICT OUTPUT RULE:
     
     try:
         # Use heavy-duty model for refining
-        llm = get_llm(for_heavy_task=True)
+        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("refiner", ""))
         response = llm.invoke(messages)
         refined_code = response.content
         
@@ -461,7 +572,13 @@ STRICT OUTPUT RULE:
             "refined_code": refined_code,
             "current_agent": "refiner",
             "messages": state.get("messages", []) + messages + [response],
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            # Increment debug loop count if we were triggered by the analyzer
+            "debug_loop_count": (
+                state.get("debug_loop_count", 0) + 1
+                if "FIX_REQUIRED" in state.get("analysis", "")
+                else state.get("debug_loop_count", 0)
+            ),
         }
     except Exception as e:
         emit_event(state["task_id"], {
@@ -481,6 +598,7 @@ STRICT OUTPUT RULE:
 # ==========================================
 def doc_writer_node(state: AgentState) -> AgentState:
     """Generate professional documentation."""
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -521,7 +639,7 @@ Output MUST be clean, well-formatted markdown suitable for a README.
     
     try:
         # Use local model for documentation (cheaper)
-        llm = get_llm(for_heavy_task=False)
+        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("doc_writer", ""))
         response = llm.invoke(messages)
         docs = response.content
         
@@ -568,6 +686,7 @@ def cli_tester_node(state: AgentState) -> AgentState:
     Test code in CLI and capture results.
     This is the unique patent feature for automated testing/debugging.
     """
+    check_interrupts(state["task_id"])
     
     emit_event(state["task_id"], {
         "type": "agent_start",
@@ -581,6 +700,10 @@ def cli_tester_node(state: AgentState) -> AgentState:
     
     # Use refined code if available, otherwise use generated code
     code_to_test = clean_code_output(state.get("refined_code") or state["generated_code"])
+    
+    # If benchmark test code is provided, append it to the code to test
+    if state.get("benchmark_test_code"):
+        code_to_test += "\n\n" + state["benchmark_test_code"]
     
     # Detect if this is Python code (simple heuristic)
     is_python = not any([
@@ -633,7 +756,7 @@ def cli_tester_node(state: AgentState) -> AgentState:
     
     emit_event(state["task_id"], {
         "type": "cli_output",
-        "message": "$ python main.py",
+        "message": f"Running code ({len(code_to_test.splitlines())} lines)...",
     })
     
     emit_event(state["task_id"], {
@@ -720,6 +843,7 @@ def cli_tester_node(state: AgentState) -> AgentState:
     return {
         **state,
         "test_results": "\n".join(test_results),
+        "test_output": result,  # Store raw output for analyzer
         "current_agent": "tester",
         "iteration_count": state.get("iteration_count", 0) + 1
     }
@@ -753,18 +877,144 @@ def should_refine(state: AgentState) -> str:
 
 
 # ==========================================
-# CONDITIONAL EDGE: Should Refine after Testing?
+# NODE 7: TERMINAL ANALYZER
 # ==========================================
-def should_refine_after_test(state: AgentState) -> str:
+def terminal_analyzer_node(state: AgentState) -> AgentState:
     """
-    Decide if we should go to documentation or loop back for fixes.
+    Analyze the raw terminal output to determine if code needs refinement
+    and what specific fixes are required.
     """
-    results = state.get("test_results", "")
+    check_interrupts(state["task_id"])
+    
+    emit_event(state["task_id"], {
+        "type": "agent_start",
+        "agent": "analyzer"
+    })
+    
+    emit_event(state["task_id"], {
+        "type": "log",
+        "message": "[AGENT_START analyzer]"
+    })
+    
+    test_output = state.get("test_output", {})
+    returncode = test_output.get("returncode")
+    stdout = test_output.get("stdout", "")
+    stderr = test_output.get("stderr", "")
+    traceback = test_output.get("traceback", "")
+    
+    # If successful, skip analysis
+    if returncode == 0 and not traceback:
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "✅ Analyzer: Code executed successfully. No fix needed."
+        })
+        return {
+            **state,
+            "analysis": "PASS",
+            "decision": "NO", # Override decision to NO if tests passed
+            "current_agent": "analyzer"
+        }
+    
+    # Analyze the error
+    prompt = f"""You are a Python Debugging Expert.
+    
+The code executed but failed with the following output:
+
+RETURN CODE: {returncode}
+
+STDOUT:
+{stdout}
+
+STDERR:
+{stderr}
+
+TRACEBACK:
+{traceback}
+
+Analyze the error carefully.
+1. Identify the root cause (SyntaxError, logic error, missing dependency, etc.).
+2. Formulate a specific fix strategy.
+
+STRICT OUTPUT FORMAT:
+If the error is trivial or the code actually worked but printed to stderr (e.g. warnings):
+PASS
+
+If a fix is required, output:
+FIX_REQUIRED: [Detailed explanation of the fix]
+
+Example:
+FIX_REQUIRED: The code failed with a ZeroDivisionError. Add a try/except block around the division operation to handle this case.
+"""
+
+    messages = [
+        SystemMessage(content="You are a smart debugger. Analyze runtime errors."),
+        HumanMessage(content=prompt)
+    ]
+    
+    try:
+        # Use heavier model for analysis
+        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("analyzer", ""))
+        response = llm.invoke(messages)
+        analysis = response.content.strip()
+        
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"🔍 Analyzer: {analysis}"
+        })
+        
+        emit_event(state["task_id"], {
+            "type": "agent_end",
+            "agent": "analyzer"
+        })
+         
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "[AGENT_END analyzer]"
+        })
+        
+        return {
+            **state,
+            "analysis": analysis,
+            "current_agent": "analyzer",
+             "messages": state.get("messages", []) + messages + [response]
+        }
+        
+    except Exception as e:
+        emit_event(state["task_id"], {
+            "type": "system_error",
+            "error": f"Analysis failed: {str(e)}"
+        })
+        return {
+            **state,
+            "analysis": "FIX_REQUIRED: Analyzer failed, please check logs manually.",
+            "error": str(e),
+            "current_agent": "analyzer"
+        }
+
+
+# ==========================================
+# CONDITIONAL EDGE: Should Refine after Analysis?
+# ==========================================
+def should_refine_after_analysis(state: AgentState) -> str:
+    """
+    Decide based on the Analyzer's output.
+    """
+    analysis = state.get("analysis", "")
     iteration_count = state.get("iteration_count", 0)
 
-    # If the test passed, or we've tried too many times (e.g., 3), move to docs
-    if "✅ Test PASSED" in results or iteration_count >= 15:
+    # If too many iterations, force stop to prevent infinite loops
+    if iteration_count >= 15:
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "🛑 Max iterations reached. Stopping."
+        })
         return "document"
-    
-    # If it failed or timed out, send it back to the refiner
-    return "refine"
+
+    if "FIX_REQUIRED" in analysis:
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"🔄 Analyzer: Fix required — debug loop #{iteration_count}"
+        })
+        return "refine"
+
+    return "document"

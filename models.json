@@ -1,0 +1,4 @@
+[
+    {"id": "ollama", "name": "Ollama (Local)", "speed": "medium", "cost": "free"},
+    {"id": "groq", "name": "Groq (Cloud)", "speed": "fast", "cost": "free tier"}
+]

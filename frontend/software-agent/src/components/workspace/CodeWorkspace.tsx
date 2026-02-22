@@ -9,8 +9,10 @@ import {
   CheckCircle,
   Copy,
   CodeIcon,
+  Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
 
 interface CodeWorkspaceProps {
   code?: string;
@@ -25,9 +27,11 @@ export function CodeWorkspace({
   fileStructure,
   onCopyCode,
 }: CodeWorkspaceProps) {
-  const [activeFile, setActiveFile] = useState<string>("main.py");
+  const [activeFile, setActiveFile] = useState<string>("code.py");
   const [files, setFiles] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
+
+
 
   useEffect(() => {
     // Initialize files from props
@@ -40,13 +44,13 @@ export function CodeWorkspace({
     } else if (code) {
       // If only code is provided, create a single file
       setFiles({
-        "main.py": code,
+        "code.py": code,
       });
-      setActiveFile("main.py");
+      setActiveFile("code.py");
     } else {
       // Default empty files
       setFiles({
-        "main.py":
+        "code.py":
           "# No code generated yet\n# Run the AI crew to generate code",
         "requirements.txt": "# Dependencies will be listed here",
         "README.md": "# Project documentation will appear here",
@@ -63,6 +67,35 @@ export function CodeWorkspace({
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const handleRunCode = async () => {
+    let command = "";
+    if (activeFile.endsWith(".py")) {
+      command = `python -u ${activeFile}`;
+    } else if (activeFile.endsWith(".js")) {
+      command = `node ${activeFile}`;
+    } else if (activeFile.endsWith(".ts") || activeFile.endsWith(".tsx")) {
+      command = `npx ts-node ${activeFile}`;
+    } else {
+      return; // file type not supported for direct run
+    }
+
+    try {
+      await fetch("http://localhost:8000/api/terminal/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command,
+          save_code: files[activeFile],
+          filename: activeFile,
+        }),
+      });
+    } catch (e) {
+      console.error("Failed to run code:", e);
+    }
+  };
+
+
 
   const getFileIcon = (fileName: string) => {
     if (fileName.endsWith(".tsx") || fileName.endsWith(".jsx")) return "⚛";
@@ -127,11 +160,10 @@ export function CodeWorkspace({
               onClick={() => setActiveFile(fileName)}
               className={`
                     px-4 text-sm border-r border-border flex items-center gap-2 h-full transition-colors font-medium whitespace-nowrap
-                    ${
-                      activeFile === fileName
-                        ? "bg-muted text-foreground border-t-2 border-t-blue-500"
-                        : "bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }
+                    ${activeFile === fileName
+                  ? "bg-muted text-foreground border-t-2 border-t-blue-500"
+                  : "bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
+                }
                   `}
             >
               <span className={getFileColor(fileName)}>
@@ -145,15 +177,28 @@ export function CodeWorkspace({
         {/* Status / Label */}
         <div className="px-4 flex items-center gap-3">
           {files[activeFile] && files[activeFile].length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleCopyCode}
-              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <Copy className="w-3 h-3 mr-1" />
-              {copied ? "Copied!" : "Copy"}
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleRunCode()}
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
+                title="Run in Terminal"
+              >
+                <Play className="w-3 h-3 mr-1" />
+                Run
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleCopyCode}
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <Copy className="w-3 h-3 mr-1" />
+                {copied ? "Copied!" : "Copy"}
+              </Button>
+            </>
           )}
 
           <Badge
@@ -166,23 +211,23 @@ export function CodeWorkspace({
       </CardHeader>
 
       <CardContent className="flex-1 p-0 overflow-hidden">
-        <div className="h-full relative">
-          <pre className="h-full p-4 overflow-auto bg-muted text-sm font-mono text-foreground whitespace-pre-wrap">
-            <code className="block min-h-full">
-              {files[activeFile] || "# File is empty"}
-            </code>
-          </pre>
-
-          {/* Line numbers */}
-          <div className="absolute left-0 top-0 bottom-0 w-12 bg-card/50 border-r border-border text-right pr-2 text-xs text-muted-foreground font-mono overflow-hidden">
-            {files[activeFile]?.split("\n").map((_, i) => (
-              <div key={i} className="leading-6">
-                {i + 1}
+        <div className="h-full overflow-auto bg-muted text-sm font-mono">
+          <div className="min-w-fit">
+            {(files[activeFile] || "# File is empty").split("\n").map((line, i) => (
+              <div key={i} className="flex hover:bg-muted-foreground/5">
+                <div className="shrink-0 w-12 bg-muted border-r border-border text-right pr-3 select-none sticky left-0 text-muted-foreground z-10 h-auto">
+                  {i + 1}
+                </div>
+                <pre className="grow pl-4 text-foreground whitespace-pre-wrap font-mono break-all py-[0.1rem]">
+                  {line || " "}
+                </pre>
               </div>
             ))}
           </div>
         </div>
       </CardContent>
+
+
     </Card>
   );
 }

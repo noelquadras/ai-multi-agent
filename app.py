@@ -14,8 +14,24 @@ import json
 import asyncio
 import os
 from datetime import datetime
-import sqlite3
 from dotenv import load_dotenv
+import httpx
+from fastapi import WebSocket, WebSocketDisconnect
+from terminal_service import manager as terminal_manager
+
+# Import database layer
+from database import (
+    init_db, 
+    get_db_conn,
+    get_task_status,
+    update_task_status, 
+    update_decision_signal,
+    update_rejection_feedback,
+    get_task_prompt,
+    emit_event, 
+    subscribers,
+    soft_delete_task
+)
 
 load_dotenv()
 
@@ -30,82 +46,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# SQLITE DATABASE LAYER
-# =========================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "crew_tasks.db")
-
-def get_db_conn():
-    """Returns a connection to the SQLite database."""
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-def init_db():
-    """Creates tables if they don't exist."""
-    with get_db_conn() as conn:
-        cursor = conn.cursor()
-        # Primary table for overall task status
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id TEXT PRIMARY KEY,
-                status TEXT,
-                model TEXT,
-                user_id TEXT,
-                project_id TEXT,
-                created_at TEXT
-            )
-        ''')
-        # Table for every log/event produced by the agents
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT,
-                type TEXT,
-                data TEXT,
-                timestamp TEXT,
-                FOREIGN KEY (task_id) REFERENCES tasks (task_id)
-            )
-        ''')
-        conn.commit()
-
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     init_db()
-
-# =========================
-# REAL-TIME STATE (RAM ONLY)
-# =========================
-# Subscribers are live browser connections. They cannot be saved to a DB.
-subscribers: Dict[str, List[asyncio.Queue]] = {}
-
-# =========================
-# CORE LOGIC HELPERS
-# =========================
-def update_task_status(task_id: str, status: str):
-    """Updates the status in the DB."""
-    with get_db_conn() as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE tasks SET status = ? WHERE task_id = ?", (status, task_id))
-        conn.commit()
-
-def emit_event(task_id: str, event: Dict[str, Any]):
-    """Saves event to DB and broadcasts to any live UI listeners."""
-    timestamp = datetime.now().isoformat()
-    event["timestamp"] = timestamp
-    
-    # 1. Save to SQLite
-    with get_db_conn() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO events (task_id, type, data, timestamp) VALUES (?, ?, ?, ?)",
-            (task_id, event.get("type"), json.dumps(event), timestamp)
-        )
-        conn.commit()
-
-    # 2. Push to active website users (Real-time)
-    if task_id in subscribers:
-        for q in subscribers[task_id]:
-            q.put_nowait(event)
+    # Set main loop for terminal manager and pre-warm session
+    loop = asyncio.get_running_loop()
+    terminal_manager.set_main_loop(loop)
+    # create the shared session on the main loop
+    try:
+        terminal_manager.get_or_create_session("project_terminal_v1", cwd=os.getcwd())
+        print("Terminal session 'project_terminal_v1' initialized on main loop.")
+    except Exception as e:
+        print(f"Failed to initialize terminal session: {e}")
 
 # =========================
 # LOGGER CLASS
@@ -135,7 +87,8 @@ class QueueLogger:
 # =========================
 # BACKGROUND WORKER
 # =========================
-def run_crew(task_id: str, prompt: str, model: str):
+def run_crew(task_id: str, prompt: str, model: str, agent_models: Optional[Dict[str, str]] = None):
+    # Lazy import to avoid circular dependency if main imports app
     from main import run_software_crew
     old_stdout = sys.stdout
     sys.stdout = QueueLogger(task_id)
@@ -145,7 +98,7 @@ def run_crew(task_id: str, prompt: str, model: str):
         emit_event(task_id, {"type": "log", "message": f"Workflow started with {model}"})
         
         # This calls your main logic in main.py
-        run_software_crew(prompt, task_id, model=model)
+        run_software_crew(prompt, task_id, model=model, agent_models=agent_models)
         
         update_task_status(task_id, "completed")
         emit_event(task_id, {"type": "task_completed"})
@@ -161,6 +114,7 @@ def run_crew(task_id: str, prompt: str, model: str):
 class CrewRequest(BaseModel):
     prompt: str
     model: Optional[str] = "ollama"
+    agent_models: Optional[Dict[str, str]] = None
     user_id: Optional[str] = None
     project_id: Optional[str] = None
 
@@ -173,6 +127,14 @@ async def health_check():
         return {"status": "ok", "version": "3.1.0", "database": "connected"}
     except Exception as e:
         return {"status": "error", "database": str(e)}
+
+@app.delete("/api/task/{task_id}")
+async def delete_task(task_id: str):
+    """Soft deletes a task (moves to archive)."""
+    success = soft_delete_task(task_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "deleted", "task_id": task_id}
 
 
 @app.get("/api/task/{task_id}")
@@ -215,7 +177,102 @@ async def stream_events(task_id: str, request: Request):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@app.websocket("/ws/terminal/{client_id}")
+async def websocket_terminal(websocket: WebSocket, client_id: str):
+    await websocket.accept()
+    # Use a fixed session_id to ensure persistence across page refreshes
+    session_id = "project_terminal_v1" 
+    
+    try:
+        session = terminal_manager.get_or_create_session(session_id)
+        
+        # Task to forward PTY output -> WebSocket
+        async def send_output():
+            async for data in session.read_stream():
+                try:
+                    await websocket.send_text(data)
+                except Exception:
+                    break
+        
+        reader_task = asyncio.create_task(send_output())
+        
+        # Main loop: WebSocket input -> PTY
+        try:
+            while True:
+                data = await websocket.receive_text()
+                # Simple protocol: "RESIZE:cols:rows" or raw input
+                if data.startswith("RESIZE:"):
+                    parts = data.split(":")
+                    if len(parts) == 3:
+                        session.resize(int(parts[1]), int(parts[2]))
+                else:
+                    session.write(data)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            reader_task.cancel()
+            
+    except Exception as e:
+        print(f"Terminal Error: {e}")
+        await websocket.close()
+
 # --- CONTROL ROUTES ---
+
+class TerminalCommand(BaseModel):
+    command: str
+    save_code: Optional[str] = None
+    filename: Optional[str] = None
+    cwd: Optional[str] = None
+
+@app.post("/api/terminal/run")
+async def run_terminal_command(body: TerminalCommand):
+    """
+    Executes a command in the shared terminal session.
+    Optionally saves code to a file before running.
+    """
+    session_id = "project_terminal_v1"
+    try:
+        # Resolve working directory
+        cwd = "../../temp-run"
+        cwd_abs = os.path.abspath(cwd)
+        
+        # Ensure the directory exists
+        if not os.path.exists(cwd_abs):
+            os.makedirs(cwd_abs, exist_ok=True)
+
+        # If code is provided, save it to the file in the correct directory
+        if body.save_code and body.filename:
+            # Security check: ensure filename is simple (no path traversal)
+            if ".." in body.filename or "/" in body.filename or "\\" in body.filename:
+                raise HTTPException(status_code=400, detail="Invalid filename")
+            
+            file_path = os.path.join(cwd_abs, body.filename)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(body.save_code)
+
+        session = terminal_manager.get_or_create_session(session_id)
+        
+        # Combine cd and command to ensure they run in sequence defined by shell
+        # Use ; for PowerShell compatibility
+        if body.cwd:
+             # This path is actually unreachable because we force cwd above, 
+             # but strictly speaking logic should use the resolved cwd_abs
+             pass
+        
+        full_command = f'cd "{cwd_abs}"; {body.command}'
+        
+        # Use new robust command execution
+        result = await session.run_command(full_command)
+        
+        return {
+            "status": "completed", 
+            "command": body.command,
+            "output": result["output"],
+            "exit_code": result["exit_code"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/task/{task_id}/pause")
 async def pause_task(task_id: str):
@@ -232,6 +289,15 @@ async def resume_task(task_id: str):
 # --- Updated Human-in-the-Loop Routes ---
 @app.post("/api/task/{task_id}/approve")
 async def approve_code(task_id: str):
+    # Set signal to APPROVED
+    update_decision_signal(task_id, "APPROVED")
+    
+    # If it was paused (waiting for approval), resume it
+    # If it was paused (waiting for approval), resume it
+    task_state = get_task_status(task_id)
+    if task_state and task_state.get("status") == "paused":
+        update_task_status(task_id, "running")
+    
     emit_event(task_id, {
         "type": "human_approval",
         "approved": True,
@@ -239,14 +305,75 @@ async def approve_code(task_id: str):
     })
     return {"status": "approved"}
 
+class RejectRequest(BaseModel):
+    feedback: Optional[str] = None
+
 @app.post("/api/task/{task_id}/reject")
-async def reject_code(task_id: str):
+async def reject_code(task_id: str, body: RejectRequest = None):
+    # Set signal to REJECTED
+    update_decision_signal(task_id, "REJECTED")
+    
+    # Store feedback if provided
+    if body and body.feedback:
+        update_rejection_feedback(task_id, body.feedback)
+    
+    # If it was paused, resume it
+    # If it was paused, resume it
+    task_state = get_task_status(task_id)
+    if task_state and task_state.get("status") == "paused":
+        update_task_status(task_id, "running")
+    
     emit_event(task_id, {
         "type": "human_approval",
         "approved": False,
-        "message": "Code rejected by user - regenerating",
+        "message": f"Code rejected by user{' with feedback' if body and body.feedback else ''}",
+        "feedback": body.feedback if body else None,
     })
     return {"status": "rejected"}
+
+class RegenerateRequest(BaseModel):
+    feedback: Optional[str] = None
+
+@app.post("/api/task/{task_id}/regenerate")
+async def regenerate_task(task_id: str, body: RegenerateRequest = None):
+    """Regenerate a task with the original prompt + optional feedback."""
+    # Get original prompt
+    original_prompt = get_task_prompt(task_id)
+    if not original_prompt:
+        raise HTTPException(status_code=404, detail="Original task not found or has no prompt")
+    
+    # Get model from original task
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT model FROM tasks WHERE task_id = ?", (task_id,))
+        row = cursor.fetchone()
+        model = row[0] if row else "ollama"
+    
+    # Build new prompt with feedback
+    new_prompt = original_prompt
+    if body and body.feedback:
+        new_prompt = f"""{original_prompt}
+
+---
+IMPORTANT USER FEEDBACK (address this as top priority):
+{body.feedback}
+---"""
+    
+    # Create new task
+    new_task_id = f"crew_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO tasks (task_id, status, model, created_at, decision_signal, prompt) VALUES (?, ?, ?, ?, ?, ?)",
+            (new_task_id, "pending", model, datetime.now().isoformat(), None, new_prompt)
+        )
+        conn.commit()
+    
+    subscribers[new_task_id] = []
+    threading.Thread(target=run_crew, args=(new_task_id, new_prompt, model), daemon=True).start()
+    
+    return {"task_id": new_task_id, "model": model}
 
 @app.post("/api/run-crew")
 async def run_crew_api(req: CrewRequest):
@@ -257,18 +384,18 @@ async def run_crew_api(req: CrewRequest):
     with get_db_conn() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO tasks (task_id, status, model, user_id, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (task_id, "pending", model, req.user_id, req.project_id, datetime.now().isoformat())
+            "INSERT INTO tasks (task_id, status, model, user_id, project_id, created_at, decision_signal, prompt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, "pending", model, req.user_id, req.project_id, datetime.now().isoformat(), None, req.prompt)
         )
         conn.commit()
 
     subscribers[task_id] = []
-    threading.Thread(target=run_crew, args=(task_id, req.prompt, model), daemon=True).start()
+    threading.Thread(target=run_crew, args=(task_id, req.prompt, model, req.agent_models), daemon=True).start()
     return {"task_id": task_id, "model": model}
 
 @app.get("/api/history")
 async def get_all_history():
-    """BONUS: Returns all past tasks for a 'History' sidebar."""
+    """Returns all past tasks for a 'History' sidebar."""
     with get_db_conn() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
@@ -277,10 +404,43 @@ async def get_all_history():
 
 @app.get("/api/models")
 async def get_available_models():
-    return {"models": [
-        {"id": "ollama", "name": "Ollama (Local)", "speed": "medium", "cost": "free"},
-        {"id": "groq", "name": "Groq (Cloud)", "speed": "fast", "cost": "free tier"}
-    ]}
+    # 1. Fetch local Ollama models
+    local_models = []
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get("http://localhost:11434/api/tags", timeout=2.0)
+            if response.status_code == 200:
+                data = response.json()
+                # Transform to our model format
+                for model in data.get("models", []):
+                    model_name = model["name"]
+                    # Clean up name if it has :latest
+                    display_name = model_name.split(":")[0]
+                    local_models.append({
+                        "id": model_name,
+                        "name": f"{display_name} (Local)",
+                        "speed": "medium",
+                        "cost": "free",
+                        "description": f"Local Ollama model: {model_name}",
+                        "type": "local"
+                    })
+    except Exception as e:
+        print(f"Failed to fetch Ollama models: {e}")
+
+    # 2. Load static/cloud models
+    try:
+        with open("models.json", "r") as f:
+            static_models = json.load(f)
+            # Add type field to static models if missing
+            for m in static_models:
+                if "type" not in m:
+                    m["type"] = "cloud" if "Cloud" in m["name"] else "local"
+    except Exception:
+        static_models = []
+
+    # 3. Combine (local first, then static)
+    # Deduplicate by ID if needed, but usually local and static won't clash if named differently
+    return {"models": local_models + static_models}
 
 if __name__ == "__main__":
     import uvicorn

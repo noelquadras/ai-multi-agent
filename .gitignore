@@ -1,6 +1,6 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
+# ─── Node / Next.js ─────────────────────────────────────────────────────────
 /node_modules
 /.pnp
 .pnp.*
@@ -30,30 +30,51 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# typescript
+*.tsbuildinfo
+next-env.d.ts
 
-# Python virtual environments
+# vercel
+.vercel
+
+# ─── Environment / Secrets ───────────────────────────────────────────────────
+.env
+.env.*
+!env-template-backend.txt
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+# Virtual environments
 venv/
 .venv/
 env/
 ENV/
 
-# vercel
-.vercel
+# Byte-compiled / optimised / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+*.egg
+MANIFEST
 
-# agent cache
-/agents/__pycache__/
-/__pycache__/
-__pycache__/app.cpython-312.pyc
-__pycache__/main.cpython-312.pyc
-agents/__pycache__/config.cpython-312.pyc
-tasks/__pycache__/tasks.cpython-312.pyc
-tools/__pycache__/
+# ─── Database ────────────────────────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
 
-#DB
-crew_tasks.db
+# ─── Benchmark results (generated artefacts) ────────────────────────────────
+data/benchmarks/results_*.json
+
+# ─── Temporary execution sandbox ─────────────────────────────────────────────
+/temp_run/
+
+# ─── Internal / draft docs (not for public repo) ─────────────────────────────
+AGENTS.md
+new_README.md
+PROJECT_CONTEXT.md
+LANGGRAPH_MIGRATION_PLAN.md
+MIGRATION_COMPLETE.md

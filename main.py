@@ -12,10 +12,14 @@ from agents.nodes import (
     doc_writer_node,
     cli_tester_node,
     should_refine,
-    should_refine_after_test,
+    cli_tester_node,
+    terminal_analyzer_node,
+    should_refine,
+    should_refine_after_analysis,
     set_model_config
 )
-from app import emit_event
+from typing import Dict, Optional
+from database import emit_event
 
 load_dotenv()
 
@@ -59,6 +63,7 @@ def create_agent_graph(include_cli_test: bool = True):
     
     if include_cli_test:
         workflow.add_node("test", cli_tester_node)
+        workflow.add_node("analyze_test", terminal_analyzer_node)
     
     # Define edges (workflow connections)
     workflow.set_entry_point("generate")
@@ -78,9 +83,13 @@ def create_agent_graph(include_cli_test: bool = True):
             }
         )
         workflow.add_edge("refine", "test")
+        
+        # New Analyzer Step
+        workflow.add_edge("test", "analyze_test")
+        
         workflow.add_conditional_edges(
-            "test",
-            should_refine_after_test, # Our new function
+            "analyze_test",
+            should_refine_after_analysis,
             {
                 "refine": "refine",    # Loop back
                 "document": "document" # Move forward
@@ -102,7 +111,7 @@ def create_agent_graph(include_cli_test: bool = True):
     return workflow.compile()
 
 
-def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
+def run_software_crew(requirements: str, task_id: str, model: str = "ollama", agent_models: Optional[Dict[str, str]] = None, benchmark_test_code: Optional[str] = None):
     """
     Execute the LangGraph agent workflow.
     
@@ -110,6 +119,8 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
         requirements: User's code requirements
         task_id: Unique task identifier
         model: LLM model to use ("ollama" or "groq")
+        agent_models: Optional dictionary of specific models for each agent
+        benchmark_test_code: Optional test code for benchmarking
         
     Returns:
         Final state with all agent outputs
@@ -125,6 +136,8 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
         "requirements": requirements,
         "task_id": task_id,
         "model": model,
+        "agent_models": agent_models or {},
+        "benchmark_test_code": benchmark_test_code,
         "generated_code": "",
         "review_report": "",
         "decision": "",
@@ -134,7 +147,9 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
         "messages": [],
         "current_agent": "",
         "error": None,
-        "iteration_count": 0
+        "iteration_count": 0,
+        "debug_loop_count": 0,
+        "total_tokens_used": None,
     }
     
     print(f"\n--- RUNNING LANGGRAPH WORKFLOW (Model: {model}) ---\n", flush=True)
@@ -193,9 +208,13 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama"):
         "refined_code": final_code,
         "documentation": final_state["documentation"],
         "test_results": final_state.get("test_results", ""),
-        "model_used": model
+        "model_used": model,
+        # Telemetry fields consumed by the benchmark harness
+        "iteration_count": final_state.get("iteration_count", 0),
+        "debug_loop_count": final_state.get("debug_loop_count", 0),
+        "total_tokens_used": final_state.get("total_tokens_used"),
     }
-    
+
     return results
 
 
