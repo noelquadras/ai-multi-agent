@@ -25,6 +25,7 @@ import {
   FileText,
   History,
   Activity,
+  StopCircle,
 } from "lucide-react";
 import { HistorySidebar } from "@/components/HistorySidebar";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
@@ -43,7 +44,7 @@ interface AgentStatus {
 
 interface TaskSnapshot {
   task_id: string;
-  status: "pending" | "running" | "completed" | "failed" | "paused";
+  status: "pending" | "running" | "completed" | "failed" | "paused" | "cancelled";
   model?: string;
   events: TaskEvent[];
 }
@@ -91,6 +92,13 @@ export default function WorkspacePage() {
   ========================= */
 
   const AGENT_REGISTRY: Record<string, AgentStatus> = {
+    spec_writer: {
+      id: "spec_writer",
+      name: "Spec Writer",
+      role: "Architect",
+      status: "idle",
+      progress: 0,
+    },
     coder: {
       id: "coder",
       name: "Coder",
@@ -213,6 +221,10 @@ export default function WorkspacePage() {
       setTaskStatus("running");
       setRightActiveTab("activity");
     }
+    if (event.type === "task_cancelled") {
+      setTaskStatus("cancelled");
+      setRightActiveTab("activity");
+    }
   };
 
   /* =========================
@@ -289,6 +301,13 @@ export default function WorkspacePage() {
     });
   };
 
+  const handleCancel = async () => {
+    if (!taskId) return;
+    await fetch(`http://localhost:8000/api/task/${taskId}/cancel`, {
+      method: "POST",
+    });
+  };
+
   const handleApprove = async () => {
     if (!taskId) return;
     await fetch(`http://localhost:8000/api/task/${taskId}/approve`, {
@@ -338,6 +357,8 @@ export default function WorkspacePage() {
         return "bg-yellow-500/20 text-yellow-400";
       case "failed":
         return "bg-red-500/20 text-red-400";
+      case "cancelled":
+        return "bg-orange-500/20 text-orange-400";
       default:
         return "bg-purple-500/20 text-purple-400";
     }
@@ -386,6 +407,16 @@ export default function WorkspacePage() {
                     className="text-green-500 hover:text-green-600"
                   >
                     <Play className="w-4 h-4 mr-1" /> Resume
+                  </Button>
+                )}
+                {(taskStatus === "running" || taskStatus === "paused") && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCancel}
+                    className="text-red-500 hover:text-red-600"
+                  >
+                    <StopCircle className="w-4 h-4 mr-1" /> Cancel
                   </Button>
                 )}
                 <div className="w-px h-6 bg-border mx-2" />

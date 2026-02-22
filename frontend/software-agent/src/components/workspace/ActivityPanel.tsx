@@ -19,6 +19,7 @@ import {
   Play,
   TestTube,
   FileText,
+  StopCircle,
 } from "lucide-react";
 
 /* =========================
@@ -30,39 +31,35 @@ export type TaskEvent =
   | { type: "agent_end"; agent: string; timestamp: string }
   | { type: "tool_start"; agent: string; tool: string; timestamp: string }
   | {
-      type: "tool_error";
-      agent: string;
-      tool: string;
-      error: string;
-      timestamp: string;
-    }
+    type: "tool_error";
+    agent: string;
+    tool: string;
+    error: string;
+    timestamp: string;
+  }
   | { type: "system_error"; error: string; timestamp: string }
   | { type: "log"; message: string; timestamp: string }
   | { type: "code_output"; agent: string; code: string; timestamp: string }
   | { type: "review_output"; agent: string; review: string; timestamp: string }
   | {
-      type: "decision_output";
-      agent: string;
-      decision: string;
-      timestamp: string;
-    }
+    type: "decision_output";
+    agent: string;
+    decision: string;
+    timestamp: string;
+  }
   | {
-      type: "doc_output";
-      agent: string;
-      documentation: string;
-      timestamp: string;
-    }
+    type: "doc_output";
+    agent: string;
+    documentation: string;
+    timestamp: string;
+  }
   | { type: "test_output"; agent: string; results: string; timestamp: string }
   | { type: "cli_output"; message: string; timestamp: string }
   | { type: "task_completed"; timestamp: string }
   | { type: "task_paused"; message: string; timestamp: string }
   | { type: "task_resumed"; message: string; timestamp: string }
-  | {
-      type: "human_approval";
-      approved: boolean;
-      message: string;
-      timestamp: string;
-    };
+  | { type: "human_approval"; approved: boolean; message: string; timestamp: string }
+  | { type: "task_cancelled"; message: string; timestamp: string };
 
 interface ActivityPanelProps {
   events?: TaskEvent[];
@@ -214,11 +211,10 @@ function AgentFilterButton({
   return (
     <button
       onClick={onClick}
-      className={`px-2 py-1 text-[10px] rounded border transition-colors whitespace-nowrap ${
-        active
+      className={`px-2 py-1 text-[10px] rounded border transition-colors whitespace-nowrap ${active
           ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
           : "bg-card text-zinc-500 border-zinc-800 hover:text-zinc-300"
-      }`}
+        }`}
     >
       {label}
     </button>
@@ -337,6 +333,12 @@ function EventRow({ event }: { event: TaskEvent }) {
 
     case "log":
       message = event.message;
+      break;
+
+    case "task_cancelled":
+      color = "text-orange-500";
+      icon = <StopCircle className="w-3 h-3" />;
+      message = event.message || "Task cancelled by user";
       break;
   }
 
