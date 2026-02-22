@@ -14,6 +14,8 @@ from agents.state import AgentState
 from agents.schemas import ReviewOutput, AnalysisOutput, DecisionOutput
 from agents.spec_schema import SpecOutput
 from agents.termination import DEFAULT_TERMINATION
+from agents.artifacts import save_artifact, save_json_artifact
+from agents.memory import AgentMemory
 from database import emit_event, get_task_status, update_decision_signal, clear_decision_signal, get_rejection_feedback, update_rejection_feedback
 import time
 from tools.executor import execute
@@ -198,6 +200,9 @@ def spec_writer_node(state: AgentState) -> AgentState:
         "message": "[AGENT_START spec_writer]"
     })
     
+    # Persist requirement text as the first artifact
+    save_artifact(state["task_id"], "requirement.txt", state["requirements"])
+    
     parser = PydanticOutputParser(pydantic_object=SpecOutput)
     
     prompt = f"""You are a Senior Software Architect.
@@ -350,6 +355,9 @@ FORBIDDEN:
         response = llm.invoke(messages)
         code = response.content
         
+        # Persist artifact to disk
+        save_artifact(state["task_id"], "code/solution.py", clean_code_output(code))
+        
         emit_event(state["task_id"], {
             "type": "log",
             "message": f"Generated {len(code)} characters of code"
@@ -474,6 +482,13 @@ DO NOT write code. DO NOT rewrite the solution.
             "type": "log",
             "message": f"[AGENT_END reviewer]"
         })
+        
+        # Persist review artifact
+        n = state.get("iteration_count", 0)
+        if review_output_dict:
+            save_json_artifact(state["task_id"], f"reviews/review_{n:03d}.json", review_output_dict)
+        else:
+            save_artifact(state["task_id"], f"reviews/review_{n:03d}.txt", review)
         
         return {
             **state,
@@ -694,8 +709,14 @@ IMPORTANT: The user has explicitly rejected the previous code. Address their fee
     else:
         analysis_section = state.get("analysis", "No analysis available.")
 
-    prompt = f"""You are a Code Refiner specializing in fixing bugs and applying improvements.
+    # Build memory context from previous refine iterations
+    memory_ctx = ""
+    if state.get("refiner_memory"):
+        mem = AgentMemory(role="refiner", entries=list(state["refiner_memory"]))
+        memory_ctx = mem.as_system_context()
 
+    prompt = f"""You are a Code Refiner specializing in fixing bugs and applying improvements.
+{memory_ctx}
 Original Code:
 {state['generated_code']}
 
@@ -713,7 +734,8 @@ Your task:
 2. Read the review feedback carefully
 3. Fix bugs identified in the Review Feedback AND any errors shown in the CLI Test Results.
 4. If user feedback is provided, address it as the TOP priority.
-5. Output ONLY the corrected code in a single code block
+5. If previous attempts are listed above, do NOT repeat the same fix — try a different approach.
+6. Output ONLY the corrected code in a single code block
 
 STRICT OUTPUT RULE:
 - Output ONLY a single fenced code block
@@ -769,9 +791,25 @@ STRICT OUTPUT RULE:
             "message": f"[AGENT_END refiner]"
         })
         
+        # Build memory entry summarising what was fixed
+        issues_fixed = []
+        ro = state.get("review_report_structured")
+        if ro and ro.get("critical_issues"):
+            issues_fixed.extend(ro["critical_issues"][:3])  # top 3
+        ao = state.get("analysis_structured")
+        if ao and ao.get("verdict") == "FIX_REQUIRED":
+            issues_fixed.append(f"{ao['error_type']}: {ao['root_cause']}")
+        if not issues_fixed:
+            issues_fixed.append("general refinement from review feedback")
+        
+        iteration = state.get("debug_loop_count", 0)
+        memory_entry = f"Iteration {iteration}: fixed [{', '.join(issues_fixed)}]"
+        new_memory = (state.get("refiner_memory") or []) + [memory_entry]
+        
         return {
             **state,
             "refined_code": refined_code,
+            "refiner_memory": new_memory,
             "current_agent": "refiner",
             "messages": state.get("messages", []) + messages + [response],
             "iteration_count": state.get("iteration_count", 0) + 1,
@@ -859,6 +897,9 @@ Output MUST be clean, well-formatted markdown suitable for a README.
             "type": "log",
             "message": f"[AGENT_END doc_writer]"
         })
+        
+        # Persist documentation artifact
+        save_artifact(state["task_id"], "docs/README.md", docs)
         
         return {
             **state,
@@ -1041,6 +1082,10 @@ def cli_tester_node(state: AgentState) -> AgentState:
         "type": "log",
         "message": "[AGENT_END tester]"
     })
+    
+    # Persist test output artifact
+    n = state.get("iteration_count", 0)
+    save_json_artifact(state["task_id"], f"test_outputs/run_{n:03d}.json", result)
     
     return {
         **state,

@@ -402,6 +402,31 @@ async def get_all_history():
         cols = [column[0] for column in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
+
+# --- ARTIFACT ROUTES ---
+
+@app.get("/api/task/{task_id}/artifacts")
+async def get_task_artifacts(task_id: str):
+    """Returns a manifest of all disk-persisted artifacts for a task."""
+    from agents.artifacts import list_artifacts
+    manifest = list_artifacts(task_id)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="No artifacts found for this task")
+    return {"task_id": task_id, "artifacts": manifest}
+
+
+@app.get("/api/task/{task_id}/artifacts/{artifact_path:path}")
+async def get_artifact_content(task_id: str, artifact_path: str):
+    """Download a specific artifact file."""
+    from agents.artifacts import load_artifact
+    # Security: block path traversal
+    if ".." in artifact_path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    content = load_artifact(task_id, artifact_path)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return {"task_id": task_id, "path": artifact_path, "content": content}
+
 @app.get("/api/models")
 async def get_available_models():
     # 1. Fetch local Ollama models

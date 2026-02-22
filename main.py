@@ -160,6 +160,8 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "review_report_structured": None,
         "decision_output": None,
         "analysis_structured": None,
+        # Per-agent memory
+        "refiner_memory": None,
     }
     
     print(f"\n--- RUNNING LANGGRAPH WORKFLOW (Model: {model}) ---\n", flush=True)

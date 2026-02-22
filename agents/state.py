@@ -40,6 +40,9 @@ class AgentState(TypedDict):
     decision_output: Optional[dict]   # Serialised DecisionOutput
     analysis_structured: Optional[dict]         # AnalysisOutput dict
 
+    # Per-agent memory (ListMemory pattern)
+    refiner_memory: Optional[list[str]]  # "Iteration N: fixed [...]" entries
+
     # Metadata
     messages: Annotated[Sequence[BaseMessage], operator.add]
     current_agent: str
