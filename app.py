@@ -90,8 +90,11 @@ class QueueLogger:
 def run_crew(task_id: str, prompt: str, model: str, agent_models: Optional[Dict[str, str]] = None):
     # Lazy import to avoid circular dependency if main imports app
     from main import run_software_crew
+    from agents.cancellation import cancellation_registry
+    
     old_stdout = sys.stdout
     sys.stdout = QueueLogger(task_id)
+    cancellation_registry.register(task_id)
 
     try:
         update_task_status(task_id, "running")
@@ -102,10 +105,18 @@ def run_crew(task_id: str, prompt: str, model: str, agent_models: Optional[Dict[
         
         update_task_status(task_id, "completed")
         emit_event(task_id, {"type": "task_completed"})
+    except RuntimeError as e:
+        if "cancelled" in str(e).lower():
+            update_task_status(task_id, "cancelled")
+            emit_event(task_id, {"type": "task_cancelled", "message": str(e)})
+        else:
+            update_task_status(task_id, "failed")
+            emit_event(task_id, {"type": "system_error", "error": str(e)})
     except Exception as e:
         update_task_status(task_id, "failed")
         emit_event(task_id, {"type": "system_error", "error": str(e)})
     finally:
+        cancellation_registry.unregister(task_id)
         sys.stdout = old_stdout
 
 # =========================
@@ -285,6 +296,15 @@ async def resume_task(task_id: str):
     update_task_status(task_id, "running")
     emit_event(task_id, {"type": "task_resumed", "message": "Resumed by user"})
     return {"status": "running"}
+
+@app.post("/api/task/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    """Cooperative cancellation — stops the task at the next node boundary."""
+    from agents.cancellation import cancellation_registry
+    cancellation_registry.cancel(task_id)
+    update_task_status(task_id, "cancelled")
+    emit_event(task_id, {"type": "task_cancelled", "message": "Cancelled by user"})
+    return {"status": "cancel_requested"}
 
 # --- Updated Human-in-the-Loop Routes ---
 @app.post("/api/task/{task_id}/approve")

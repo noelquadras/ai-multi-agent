@@ -94,8 +94,9 @@ def create_agent_graph(include_cli_test: bool = True):
             "analyze_test",
             should_refine_after_analysis,
             {
-                "refine": "refine",    # Loop back
-                "document": "document" # Move forward
+                "refine": "refine",      # Targeted fix
+                "generate": "generate",  # Full regeneration (HandoffMessage pattern)
+                "document": "document"   # Move forward
             }
         )
     else:

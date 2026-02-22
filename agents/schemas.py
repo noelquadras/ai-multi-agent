@@ -42,8 +42,8 @@ class ReviewOutput(BaseModel):
 class AnalysisOutput(BaseModel):
     """Structured output from the Terminal Analyzer node."""
 
-    verdict: Literal["PASS", "FIX_REQUIRED"] = Field(
-        description="PASS if the code ran correctly, FIX_REQUIRED if a fix is needed."
+    verdict: Literal["PASS", "FIX_REQUIRED", "REGENERATE"] = Field(
+        description="PASS if the code ran correctly, FIX_REQUIRED for a targeted fix, REGENERATE if the approach is fundamentally wrong and needs full regeneration."
     )
     error_type: Literal["syntax", "runtime", "assertion", "timeout", "none"] = Field(
         description="Category of the error observed, or 'none' if the code passed."

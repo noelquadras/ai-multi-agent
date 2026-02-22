@@ -54,11 +54,18 @@ def get_ollama_llm():
     return _ollama_llm
 
 
+from agents.cancellation import cancellation_registry
+
+
 def check_interrupts(task_id: str):
     """
-    Checks DB for pause status and waits if paused.
-    To be called at the start of every node.
+    Checks DB for pause status and cancellation registry.
+    Called at the start of every node for cooperative cancellation.
     """
+    # Cooperative cancellation (ExternalTermination pattern)
+    if cancellation_registry.is_cancelled(task_id):
+        raise RuntimeError(f"Task {task_id} cancelled by user")
+    
     while True:
         state = get_task_status(task_id)
         if not state:
@@ -66,7 +73,9 @@ def check_interrupts(task_id: str):
         
         status = state.get("status")
         if status == "paused":
-            # Just wait
+            # Check cancellation while paused too
+            if cancellation_registry.is_cancelled(task_id):
+                raise RuntimeError(f"Task {task_id} cancelled by user")
             time.sleep(1)
             continue
         
@@ -177,6 +186,24 @@ def clean_code_output(text: str) -> str:
     return text.strip()
 
 
+# ===========================================
+# BUFFERED MESSAGE CONTEXT
+# ===========================================
+
+MAX_CONTEXT_MESSAGES = 20  # AutoGen BufferedChatCompletionContext pattern
+
+def _buffered_messages(state: AgentState, new_messages: list) -> list:
+    """Append new messages and trim to the last MAX_CONTEXT_MESSAGES.
+    
+    Prevents unbounded growth of the messages list which would
+    overflow the LLM context window on long (15-iteration) tasks.
+    """
+    all_msgs = list(state.get("messages") or []) + new_messages
+    if len(all_msgs) > MAX_CONTEXT_MESSAGES:
+        return all_msgs[-MAX_CONTEXT_MESSAGES:]
+    return all_msgs
+
+
 # ==========================================
 # NODE 0: SPEC WRITER (MetaGPT artifact-first)
 # ==========================================
@@ -269,7 +296,7 @@ The spec must cover:
             "spec_doc_path": spec_doc_path,
             "spec_structured": spec_structured,
             "current_agent": "spec_writer",
-            "messages": state.get("messages", []) + messages + [response],
+            "messages": _buffered_messages(state, messages + [response]),
         }
     except Exception as e:
         emit_event(state["task_id"], {
@@ -384,7 +411,7 @@ FORBIDDEN:
             **state,
             "generated_code": code,
             "current_agent": "coder",
-            "messages": state.get("messages", []) + messages + [response],
+            "messages": _buffered_messages(state, messages + [response]),
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -495,7 +522,7 @@ DO NOT write code. DO NOT rewrite the solution.
             "review_report": review,
             "review_report_structured": review_output_dict,
             "current_agent": "reviewer",
-            "messages": state.get("messages", []) + messages + [response],
+            "messages": _buffered_messages(state, messages + [response]),
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -682,66 +709,87 @@ IMPORTANT: The user has explicitly rejected the previous code. Address their fee
         # Clear feedback after reading
         update_rejection_feedback(state["task_id"], None)
     
-    # Build review section — prefer structured output if available
-    review_section = ""
+    # ── Structured prompt (Path A) ─────────────────────────────────────────
+    # When structured data is available use it directly — no LLM re-parsing
+    # of prose walls of text.
     ro = state.get("review_report_structured")
-    if ro:
-        parts = [f"Verdict: {ro['verdict']}  (Score: {ro['overall_score']}/10)"]
-        if ro.get("critical_issues"):
-            parts.append("Critical Issues:\n" + "\n".join(f"  - {i}" for i in ro["critical_issues"]))
-        if ro.get("fix_suggestions"):
-            parts.append("Fix Suggestions:\n" + "\n".join(f"  - {s}" for s in ro["fix_suggestions"]))
-        review_section = "\n".join(parts)
-    else:
-        review_section = state["review_report"]
-
-    # Build analysis section — prefer structured output if available
-    analysis_section = ""
     ao = state.get("analysis_structured")
-    if ao:
-        parts = [f"Verdict: {ao['verdict']}"]
-        if ao["verdict"] == "FIX_REQUIRED":
-            parts.append(f"Error Type: {ao['error_type']}")
-            parts.append(f"Root Cause: {ao['root_cause']}")
-            if ao.get("fix_hints"):
-                parts.append("Fix Hints:\n" + "\n".join(f"  - {h}" for h in ao["fix_hints"]))
-        analysis_section = "\n".join(parts)
-    else:
-        analysis_section = state.get("analysis", "No analysis available.")
 
-    # Build memory context from previous refine iterations
+    if ro:
+        review = ReviewOutput(**ro)
+        critical_block = "\n".join(f"- {i}" for i in review.critical_issues) or "- None"
+        suggestions_block = "\n".join(f"- {s}" for s in review.fix_suggestions) or "- None"
+        score_line = f"Score: {review.overall_score}/10 | Verdict: {review.verdict}"
+    else:
+        # Path B fallback — raw prose
+        critical_block = ""
+        suggestions_block = state.get("review_report", "No review available.")
+        score_line = ""
+
+    if ao:
+        analysis = AnalysisOutput(**ao)
+        if analysis.verdict == "FIX_REQUIRED":
+            hint_block = "\n".join(f"- {h}" for h in (analysis.fix_hints or [])) or "- No hints"
+            error_block = (
+                f"Error type : {analysis.error_type}\n"
+                f"Root cause : {analysis.root_cause}\n"
+                f"Hints      :\n{hint_block}"
+            )
+        else:
+            error_block = "Sandbox: PASS — no runtime error."
+    else:
+        error_block = state.get("analysis", "No analysis available.")
+
+    # Base code: always refine from the latest refined version, not the original
+    code_to_fix = state.get("refined_code") or state["generated_code"]
+
+    # ── Build prompt ────────────────────────────────────────────────────────
     memory_ctx = ""
     if state.get("refiner_memory"):
         mem = AgentMemory(role="refiner", entries=list(state["refiner_memory"]))
         memory_ctx = mem.as_system_context()
 
-    prompt = f"""You are a Code Refiner specializing in fixing bugs and applying improvements.
+    structured_review_section = ""
+    if ro:
+        structured_review_section = f"""## Code review ({score_line})
+
+### Critical issues (ALL must be resolved):
+{critical_block}
+
+### Fix suggestions:
+{suggestions_block}
+"""
+    else:
+        structured_review_section = f"""## Review feedback:
+{suggestions_block}
+"""
+
+    sandbox_section = f"""## Sandbox execution result:
+{error_block}
+"""
+
+    user_feedback_section = ""
+    if user_feedback:
+        user_feedback_section = f"""## ⚠️ User rejection feedback (TOP PRIORITY):
+{user_feedback}
+"""
+
+    prompt = f"""You are a Code Refiner. Your ONLY job is to output fixed, runnable Python code.
 {memory_ctx}
-Original Code:
-{state['generated_code']}
+{structured_review_section}
+{sandbox_section}
+{user_feedback_section}
+## Code to fix:
+```python
+{code_to_fix}
+```
 
-Review Feedback:
-{review_section}
-
-CLI Test Results (if any):
-{state.get('test_results', 'No test results available.')}
-
-Analyzer Feedback (if any):
-{analysis_section}
-{feedback_section}
-Your task:
-1. Read the original code
-2. Read the review feedback carefully
-3. Fix bugs identified in the Review Feedback AND any errors shown in the CLI Test Results.
-4. If user feedback is provided, address it as the TOP priority.
-5. If previous attempts are listed above, do NOT repeat the same fix — try a different approach.
-6. Output ONLY the corrected code in a single code block
-
-STRICT OUTPUT RULE:
-- Output ONLY a single fenced code block
-- NO explanations
-- NO comments about what you changed
-- Just the final, corrected code
+Rules:
+1. Fix EVERY critical issue and ALL fix suggestions listed above.
+2. Fix the sandbox error if one is shown.
+3. If user feedback is provided, address it first.
+4. If previous failed attempts are listed, do NOT repeat the same fix — try a different approach.
+5. Output ONLY a single fenced ```python … ``` block. No prose, no comments outside the block.
 """
     
     messages = [
@@ -811,7 +859,7 @@ STRICT OUTPUT RULE:
             "refined_code": refined_code,
             "refiner_memory": new_memory,
             "current_agent": "refiner",
-            "messages": state.get("messages", []) + messages + [response],
+            "messages": _buffered_messages(state, messages + [response]),
             "iteration_count": state.get("iteration_count", 0) + 1,
             # Increment debug loop count if we were triggered by the analyzer
             "debug_loop_count": (
@@ -905,7 +953,7 @@ Output MUST be clean, well-formatted markdown suitable for a README.
             **state,
             "documentation": docs,
             "current_agent": "doc_writer",
-            "messages": state.get("messages", []) + messages + [response],
+            "messages": _buffered_messages(state, messages + [response]),
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -1235,7 +1283,7 @@ Analyze the error carefully.
             "analysis": analysis,
             "analysis_structured": analysis_output_dict,
             "current_agent": "analyzer",
-            "messages": state.get("messages", []) + messages + [response]
+            "messages": _buffered_messages(state, messages + [response])
         }
         
     except Exception as e:
@@ -1280,11 +1328,24 @@ def should_refine_after_analysis(state: AgentState) -> str:
     # Prefer structured output
     ao = state.get("analysis_structured")
     if ao:
-        needs_fix = ao.get("verdict") == "FIX_REQUIRED"
+        verdict = ao.get("verdict", "PASS")
     else:
-        needs_fix = "FIX_REQUIRED" in state.get("analysis", "")
+        analysis_text = state.get("analysis", "")
+        if "REGENERATE" in analysis_text:
+            verdict = "REGENERATE"
+        elif "FIX_REQUIRED" in analysis_text:
+            verdict = "FIX_REQUIRED"
+        else:
+            verdict = "PASS"
 
-    if needs_fix:
+    if verdict == "REGENERATE":
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"🔁 Analyzer: Approach is wrong — escalating to full REGENERATE"
+        })
+        return "generate"
+
+    if verdict == "FIX_REQUIRED":
         emit_event(state["task_id"], {
             "type": "log",
             "message": f"🔄 Analyzer: Fix required — debug loop #{state.get('debug_loop_count', 0)}"
