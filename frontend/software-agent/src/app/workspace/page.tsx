@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AgentPanel } from "@/components/workspace/AgentPanel";
 import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
@@ -60,10 +60,10 @@ interface TaskOutputs {
 type SidePanel = "cli" | "docs" | "terminal";
 
 /* =========================
-   COMPONENT
+   COMPONENTS
 ========================= */
 
-export default function WorkspacePage() {
+function WorkspaceContent() {
   const searchParams = useSearchParams();
   const taskId = searchParams.get("taskId");
 
@@ -80,7 +80,6 @@ export default function WorkspacePage() {
     testResults: "",
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<SidePanel>("cli");
   const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli" | "docs">("activity");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
 
@@ -540,6 +539,14 @@ export default function WorkspacePage() {
         onSubmit={handleReject}
       />
     </SidebarProvider >
+  );
+}
+
+export default function WorkspacePage() {
+  return (
+    <Suspense fallback={<div className="flex h-screen items-center justify-center">Loading Workspace...</div>}>
+      <WorkspaceContent />
+    </Suspense>
   );
 }
 

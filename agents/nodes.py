@@ -1,14 +1,20 @@
 """
 LangGraph agent nodes - each agent is implemented as a node function.
 Supports both Ollama (local) and Groq (cloud) LLMs.
+
+Refactored to use:
+- llm.with_structured_output() instead of PydanticOutputParser
+- trim_messages instead of manual _buffered_messages
+- ChatPromptTemplate.from_messages instead of raw f-strings
+- add_messages reducer (return only new messages, not full history)
 """
 
 import re
 import os
 import json
 from typing import Optional
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 from agents.state import AgentState
 from agents.schemas import ReviewOutput, AnalysisOutput, DecisionOutput
@@ -57,6 +63,19 @@ def get_ollama_llm():
 from agents.cancellation import cancellation_registry
 
 
+# TODO: Migrate check_interrupts to LangGraph's native interrupt() and Command primitives.
+# Instead of polling the DB in a blocking sleep loop (which ties up a thread),
+# use `from langgraph.types import interrupt, Command`:
+#   - Replace the `while True: ... time.sleep(1)` pause-polling with
+#     `interrupt({"reason": "paused", "task_id": task_id})`, which suspends
+#     the graph execution without holding a thread.
+#   - The external resume signal (from the UI/API) would call
+#     `graph.update_state(thread_id, command=Command(resume=...))` to
+#     re-enter the graph at the interrupted node.
+#   - Cancellation can be handled by resuming with a Command that routes
+#     to a terminal "cancelled" node, or by simply not resuming.
+# This eliminates the sleep-loop entirely, improving thread efficiency
+# under high concurrency (many paused tasks won't each block a thread).
 def check_interrupts(task_id: str):
     """
     Checks DB for pause status and cancellation registry.
@@ -187,26 +206,44 @@ def clean_code_output(text: str) -> str:
 
 
 # ===========================================
-# BUFFERED MESSAGE CONTEXT
+# NATIVE MESSAGE TRIMMING (replaces _buffered_messages)
 # ===========================================
 
-MAX_CONTEXT_MESSAGES = 20  # AutoGen BufferedChatCompletionContext pattern
+_trim = trim_messages(
+    strategy="last",
+    max_tokens=20,
+    token_counter=len,
+    start_on="human",
+    include_system=True,
+)
 
-def _buffered_messages(state: AgentState, new_messages: list) -> list:
-    """Append new messages and trim to the last MAX_CONTEXT_MESSAGES.
-    
-    Prevents unbounded growth of the messages list which would
-    overflow the LLM context window on long (15-iteration) tasks.
-    """
-    all_msgs = list(state.get("messages") or []) + new_messages
-    if len(all_msgs) > MAX_CONTEXT_MESSAGES:
-        return all_msgs[-MAX_CONTEXT_MESSAGES:]
-    return all_msgs
+
+def _trimmed_invoke(llm, messages: list):
+    """Trim messages to fit context window, then invoke the LLM."""
+    trimmed = _trim.invoke(messages)
+    return llm.invoke(trimmed)
 
 
 # ==========================================
 # NODE 0: SPEC WRITER (MetaGPT artifact-first)
 # ==========================================
+
+_spec_writer_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a software architect who writes concise, actionable technical specs."),
+    ("human", (
+        "You are a Senior Software Architect.\n"
+        "Given the requirements below, produce a concise technical specification.\n\n"
+        "Requirements:\n{requirements}\n\n"
+        "The spec must cover:\n"
+        "1. Implementation approach — what strategy, libraries, and patterns to use\n"
+        "2. File list — always [\"solution.py\"] for a single-file solution\n"
+        "3. Class/function design — plain-English outline of the key abstractions\n"
+        "4. Key edge cases — things the implementation MUST handle\n"
+        "5. Complexity estimate — \"simple\", \"medium\", or \"complex\""
+    )),
+])
+
+
 def spec_writer_node(state: AgentState) -> AgentState:
     """
     Produce a technical spec BEFORE code generation.
@@ -230,37 +267,16 @@ def spec_writer_node(state: AgentState) -> AgentState:
     # Persist requirement text as the first artifact
     save_artifact(state["task_id"], "requirement.txt", state["requirements"])
     
-    parser = PydanticOutputParser(pydantic_object=SpecOutput)
-    
-    prompt = f"""You are a Senior Software Architect.
-Given the requirements below, produce a concise technical specification.
-
-Requirements:
-{state['requirements']}
-
-The spec must cover:
-1. Implementation approach — what strategy, libraries, and patterns to use
-2. File list — always ["solution.py"] for a single-file solution
-3. Class/function design — plain-English outline of the key abstractions
-4. Key edge cases — things the implementation MUST handle
-5. Complexity estimate — "simple", "medium", or "complex"
-
-{parser.get_format_instructions()}
-"""
-    
-    messages = [
-        SystemMessage(content="You are a software architect who writes concise, actionable technical specs."),
-        HumanMessage(content=prompt)
-    ]
+    messages = _spec_writer_prompt.format_messages(requirements=state["requirements"])
     
     try:
         llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("spec_writer", ""))
-        response = llm.invoke(messages)
+        structured_llm = llm.with_structured_output(SpecOutput)
         
         spec_structured = None
         spec_doc_path = None
         try:
-            spec: SpecOutput = parser.parse(response.content)
+            spec: SpecOutput = structured_llm.invoke(messages)
             spec_structured = spec.model_dump()
             
             # Persist to disk (MetaGPT artifact-first pattern)
@@ -278,7 +294,7 @@ The spec must cover:
         except Exception as parse_err:
             emit_event(state["task_id"], {
                 "type": "log",
-                "message": f"Spec parse failed, continuing without structured spec: {parse_err}"
+                "message": f"Structured spec extraction failed, continuing without: {parse_err}"
             })
         
         emit_event(state["task_id"], {
@@ -291,12 +307,12 @@ The spec must cover:
             "message": "[AGENT_END spec_writer]"
         })
         
+        # Return only new messages — add_messages reducer handles appending
         return {
-            **state,
             "spec_doc_path": spec_doc_path,
             "spec_structured": spec_structured,
             "current_agent": "spec_writer",
-            "messages": _buffered_messages(state, messages + [response]),
+            "messages": messages,  # new messages only; reducer appends
         }
     except Exception as e:
         emit_event(state["task_id"], {
@@ -305,7 +321,6 @@ The spec must cover:
         })
         # Non-fatal — downstream generate will still work without a spec
         return {
-            **state,
             "spec_doc_path": None,
             "spec_structured": None,
             "error": str(e),
@@ -316,6 +331,37 @@ The spec must cover:
 # ==========================================
 # NODE 1: CODE GENERATOR
 # ==========================================
+
+_code_generator_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are an expert code generator focused on clean, maintainable code."),
+    ("human", (
+        "You are a Senior Software Developer.\n"
+        "Generate complete, runnable PYTHON code for the following requirements:\n\n"
+        "{requirements}\n"
+        "{spec_section}\n\n"
+        "CRITICAL OUTPUT FORMAT:\n"
+        "```python\n"
+        "# your code here\n"
+        "```\n\n"
+        "STRICT RULES:\n"
+        "- Start IMMEDIATELY with ```python (no text before it)\n"
+        "- Write ONLY Python code inside the block\n"
+        "- End with ``` (no text after it)\n"
+        "- NO explanations, NO comments outside the code block\n"
+        "- Code must be syntactically correct and runnable\n"
+        "- MUST be Python 3.11+ compatible\n"
+        "- DO NOT use input(), open(), or file I/O (sandbox restrictions)\n"
+        "- Use print() to show output\n"
+        "- Do NOT leave TODOs or placeholder comments\n\n"
+        "FORBIDDEN:\n"
+        "❌ \"Here's a solution...\"\n"
+        "❌ \"This code does...\"\n"
+        "❌ Text before or after the code block\n"
+        "✅ Start directly with: ```python"
+    )),
+])
+
+
 def code_generator_node(state: AgentState) -> AgentState:
     """Generate initial code based on requirements and optional spec."""
     check_interrupts(state["task_id"])
@@ -335,51 +381,24 @@ def code_generator_node(state: AgentState) -> AgentState:
     spec_section = ""
     if state.get("spec_structured"):
         spec = SpecOutput(**state["spec_structured"])
-        spec_section = f"""\n--- TECHNICAL SPEC (follow this!) ---
-- Approach: {spec.implementation_approach}
-- Classes/Functions: {spec.class_design}
-- Must handle: {', '.join(spec.key_edge_cases)}
-- Complexity: {spec.complexity_estimate}
----"""
+        spec_section = (
+            "\n--- TECHNICAL SPEC (follow this!) ---\n"
+            f"- Approach: {spec.implementation_approach}\n"
+            f"- Classes/Functions: {spec.class_design}\n"
+            f"- Must handle: {', '.join(spec.key_edge_cases)}\n"
+            f"- Complexity: {spec.complexity_estimate}\n"
+            "---"
+        )
     
-    prompt = f"""You are a Senior Software Developer.
-Generate complete, runnable PYTHON code for the following requirements:
-
-{state['requirements']}
-{spec_section}
-
-CRITICAL OUTPUT FORMAT:
-```python
-# your code here
-```
-
-STRICT RULES:
-- Start IMMEDIATELY with ```python (no text before it)
-- Write ONLY Python code inside the block
-- End with ``` (no text after it)
-- NO explanations, NO comments outside the code block
-- Code must be syntactically correct and runnable
-- MUST be Python 3.11+ compatible
-- DO NOT use input(), open(), or file I/O (sandbox restrictions)
-- Use print() to show output
-- Do NOT leave TODOs or placeholder comments
-
-FORBIDDEN:
-❌ "Here's a solution..."
-❌ "This code does..."
-❌ Text before or after the code block
-✅ Start directly with: ```python
-"""
-    
-    messages = [
-        SystemMessage(content="You are an expert code generator focused on clean, maintainable code."),
-        HumanMessage(content=prompt)
-    ]
+    messages = _code_generator_prompt.format_messages(
+        requirements=state["requirements"],
+        spec_section=spec_section,
+    )
     
     try:
         # Use heavy-duty model for code generation
         llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("coder", ""))
-        response = llm.invoke(messages)
+        response = _trimmed_invoke(llm, messages)
         code = response.content
         
         # Persist artifact to disk
@@ -408,10 +427,9 @@ FORBIDDEN:
         })
         
         return {
-            **state,
             "generated_code": code,
             "current_agent": "coder",
-            "messages": _buffered_messages(state, messages + [response]),
+            "messages": [response],  # new messages only
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -420,7 +438,6 @@ FORBIDDEN:
             "error": f"Code generation failed: {str(e)}"
         })
         return {
-            **state,
             "error": str(e),
             "current_agent": "coder"
         }
@@ -448,6 +465,17 @@ def _format_review_output(review: ReviewOutput) -> str:
     return "\n".join(lines)
 
 
+_code_reviewer_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a meticulous code reviewer focused on security, bugs, and best practices."),
+    ("human", (
+        "You are an Expert QA and Security Auditor.\n"
+        "Review the following code critically:\n\n"
+        "{generated_code}\n\n"
+        "DO NOT write code. DO NOT rewrite the solution."
+    )),
+])
+
+
 def code_reviewer_node(state: AgentState) -> AgentState:
     """Review generated code for issues using structured Pydantic output."""
     check_interrupts(state["task_id"])
@@ -462,35 +490,21 @@ def code_reviewer_node(state: AgentState) -> AgentState:
         "message": f"[AGENT_START reviewer]"
     })
     
-    parser = PydanticOutputParser(pydantic_object=ReviewOutput)
-    
-    prompt = f"""You are an Expert QA and Security Auditor.
-Review the following code critically:
-
-{state['generated_code']}
-
-DO NOT write code. DO NOT rewrite the solution.
-
-{parser.get_format_instructions()}
-"""
-    
-    messages = [
-        SystemMessage(content="You are a meticulous code reviewer focused on security, bugs, and best practices."),
-        HumanMessage(content=prompt)
-    ]
+    messages = _code_reviewer_prompt.format_messages(generated_code=state["generated_code"])
     
     try:
         llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("reviewer", ""))
-        response = llm.invoke(messages)
+        structured_llm = llm.with_structured_output(ReviewOutput)
         
         # Parse structured output, fall back to raw string
         review_output_dict = None
         try:
-            result: ReviewOutput = parser.parse(response.content)
+            result: ReviewOutput = structured_llm.invoke(messages)
             review_output_dict = result.model_dump()
             review = result.model_dump_json(indent=2)  # pretty JSON for SSE display
         except Exception:
-            # Fallback: LLM didn't produce valid JSON
+            # Fallback: with_structured_output failed, try raw invoke
+            response = _trimmed_invoke(llm, messages)
             review = response.content
         
         emit_event(state["task_id"], {
@@ -518,11 +532,10 @@ DO NOT write code. DO NOT rewrite the solution.
             save_artifact(state["task_id"], f"reviews/review_{n:03d}.txt", review)
         
         return {
-            **state,
             "review_report": review,
             "review_report_structured": review_output_dict,
             "current_agent": "reviewer",
-            "messages": _buffered_messages(state, messages + [response]),
+            "messages": messages,  # new messages only
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -531,7 +544,6 @@ DO NOT write code. DO NOT rewrite the solution.
             "error": f"Code review failed: {str(e)}"
         })
         return {
-            **state,
             "error": str(e),
             "current_agent": "reviewer"
         }
@@ -540,6 +552,18 @@ DO NOT write code. DO NOT rewrite the solution.
 # ==========================================
 # NODE 3: DECISION MAKER
 # ==========================================
+
+_decision_maker_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a deterministic decision auditor."),
+    ("human", (
+        "Analyze ONLY the code below:\n\n"
+        "{generated_code}\n\n"
+        "Question: Does the code have bugs, security vulnerabilities, or incorrect behavior?\n"
+        "Answer YES if it needs refinement, NO if it is good enough."
+    )),
+])
+
+
 def decision_maker_node(state: AgentState) -> AgentState:
     """
     Decide if code needs refinement.
@@ -597,30 +621,21 @@ def decision_maker_node(state: AgentState) -> AgentState:
                 "message": f"⚡ Deterministic decision from structured review (no LLM call)"
             })
         else:
-            # 3. Fallback: LLM decision (only when structured data is unavailable)
-            parser = PydanticOutputParser(pydantic_object=DecisionOutput)
-            prompt = f"""Analyze ONLY the code below:
-
-{state['generated_code']}
-
-Question: Does the code have bugs, security vulnerabilities, or incorrect behavior?
-Answer YES if it needs refinement, NO if it is good enough.
-
-{parser.get_format_instructions()}
-"""
-            messages = [
-                SystemMessage(content="You are a deterministic decision auditor."),
-                HumanMessage(content=prompt)
-            ]
+            # 3. Fallback: LLM decision with structured output
+            messages = _decision_maker_prompt.format_messages(
+                generated_code=state["generated_code"]
+            )
             llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("decision", ""))
-            response = llm.invoke(messages)
+            structured_llm = llm.with_structured_output(DecisionOutput)
             
             try:
-                result: DecisionOutput = parser.parse(response.content)
+                result: DecisionOutput = structured_llm.invoke(messages)
                 decision = result.decision
                 rationale = result.rationale
                 decision_output_dict = result.model_dump()
             except Exception:
+                # Fallback: structured output failed, try raw invoke
+                response = _trimmed_invoke(llm, messages)
                 decision = response.content.strip().upper()
                 rationale = "Parsed from raw LLM output"
         
@@ -655,11 +670,9 @@ Answer YES if it needs refinement, NO if it is good enough.
         })
         
         return {
-            **state,
             "decision": decision,
             "decision_output": decision_output_dict,
             "current_agent": "decision",
-            "messages": state.get("messages", []),
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -668,7 +681,6 @@ Answer YES if it needs refinement, NO if it is good enough.
             "error": f"Decision making failed: {str(e)}"
         })
         return {
-            **state,
             "decision": "YES",  # Default to refinement on error
             "error": str(e),
             "current_agent": "decision"
@@ -678,6 +690,29 @@ Answer YES if it needs refinement, NO if it is good enough.
 # ==========================================
 # NODE 4: CODE REFINER
 # ==========================================
+
+_code_refiner_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a refactoring specialist who fixes code based on feedback."),
+    ("human", (
+        "You are a Code Refiner. Your ONLY job is to output fixed, runnable Python code.\n"
+        "{memory_ctx}\n"
+        "{structured_review_section}\n"
+        "{sandbox_section}\n"
+        "{user_feedback_section}\n"
+        "## Code to fix:\n"
+        "```python\n"
+        "{code_to_fix}\n"
+        "```\n\n"
+        "Rules:\n"
+        "1. Fix EVERY critical issue and ALL fix suggestions listed above.\n"
+        "2. Fix the sandbox error if one is shown.\n"
+        "3. If user feedback is provided, address it first.\n"
+        "4. If previous failed attempts are listed, do NOT repeat the same fix — try a different approach.\n"
+        "5. Output ONLY a single fenced ```python … ``` block. No prose, no comments outside the block."
+    )),
+])
+
+
 def code_refiner_node(state: AgentState) -> AgentState:
     """Refine code based on review feedback."""
     check_interrupts(state["task_id"])
@@ -696,12 +731,11 @@ def code_refiner_node(state: AgentState) -> AgentState:
     user_feedback = get_rejection_feedback(state["task_id"])
     feedback_section = ""
     if user_feedback:
-        feedback_section = f"""
-User Rejection Feedback:
-{user_feedback}
-
-IMPORTANT: The user has explicitly rejected the previous code. Address their feedback above as your top priority.
-"""
+        feedback_section = (
+            f"\nUser Rejection Feedback:\n{user_feedback}\n\n"
+            "IMPORTANT: The user has explicitly rejected the previous code. "
+            "Address their feedback above as your top priority."
+        )
         emit_event(state["task_id"], {
             "type": "log",
             "message": f"📝 User feedback received: {user_feedback[:100]}..."
@@ -743,64 +777,39 @@ IMPORTANT: The user has explicitly rejected the previous code. Address their fee
     # Base code: always refine from the latest refined version, not the original
     code_to_fix = state.get("refined_code") or state["generated_code"]
 
-    # ── Build prompt ────────────────────────────────────────────────────────
+    # ── Build prompt variables ──────────────────────────────────────────────
     memory_ctx = ""
     if state.get("refiner_memory"):
         mem = AgentMemory(role="refiner", entries=list(state["refiner_memory"]))
         memory_ctx = mem.as_system_context()
 
-    structured_review_section = ""
     if ro:
-        structured_review_section = f"""## Code review ({score_line})
-
-### Critical issues (ALL must be resolved):
-{critical_block}
-
-### Fix suggestions:
-{suggestions_block}
-"""
+        structured_review_section = (
+            f"## Code review ({score_line})\n\n"
+            f"### Critical issues (ALL must be resolved):\n{critical_block}\n\n"
+            f"### Fix suggestions:\n{suggestions_block}"
+        )
     else:
-        structured_review_section = f"""## Review feedback:
-{suggestions_block}
-"""
+        structured_review_section = f"## Review feedback:\n{suggestions_block}"
 
-    sandbox_section = f"""## Sandbox execution result:
-{error_block}
-"""
+    sandbox_section = f"## Sandbox execution result:\n{error_block}"
 
     user_feedback_section = ""
     if user_feedback:
-        user_feedback_section = f"""## ⚠️ User rejection feedback (TOP PRIORITY):
-{user_feedback}
-"""
+        user_feedback_section = f"## ⚠️ User rejection feedback (TOP PRIORITY):\n{user_feedback}"
 
-    prompt = f"""You are a Code Refiner. Your ONLY job is to output fixed, runnable Python code.
-{memory_ctx}
-{structured_review_section}
-{sandbox_section}
-{user_feedback_section}
-## Code to fix:
-```python
-{code_to_fix}
-```
-
-Rules:
-1. Fix EVERY critical issue and ALL fix suggestions listed above.
-2. Fix the sandbox error if one is shown.
-3. If user feedback is provided, address it first.
-4. If previous failed attempts are listed, do NOT repeat the same fix — try a different approach.
-5. Output ONLY a single fenced ```python … ``` block. No prose, no comments outside the block.
-"""
-    
-    messages = [
-        SystemMessage(content="You are a refactoring specialist who fixes code based on feedback."),
-        HumanMessage(content=prompt)
-    ]
+    messages = _code_refiner_prompt.format_messages(
+        memory_ctx=memory_ctx,
+        structured_review_section=structured_review_section,
+        sandbox_section=sandbox_section,
+        user_feedback_section=user_feedback_section,
+        code_to_fix=code_to_fix,
+    )
     
     try:
         # Use heavy-duty model for refining
         llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("refiner", ""))
-        response = llm.invoke(messages)
+        response = _trimmed_invoke(llm, messages)
         refined_code = response.content
         
         # Try to execute the code if it's Python
@@ -855,11 +864,10 @@ Rules:
         new_memory = (state.get("refiner_memory") or []) + [memory_entry]
         
         return {
-            **state,
             "refined_code": refined_code,
             "refiner_memory": new_memory,
             "current_agent": "refiner",
-            "messages": _buffered_messages(state, messages + [response]),
+            "messages": [response],  # new messages only
             "iteration_count": state.get("iteration_count", 0) + 1,
             # Increment debug loop count if we were triggered by the analyzer
             "debug_loop_count": (
@@ -874,7 +882,6 @@ Rules:
             "error": f"Code refinement failed: {str(e)}"
         })
         return {
-            **state,
             "refined_code": state["generated_code"],  # Fallback to original
             "error": str(e),
             "current_agent": "refiner"
@@ -884,6 +891,27 @@ Rules:
 # ==========================================
 # NODE 5: DOCUMENTATION WRITER
 # ==========================================
+
+_doc_writer_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a documentation expert who creates clear, comprehensive technical documentation."),
+    ("human", (
+        "You are a Senior Technical Writer.\n\n"
+        "Write PROFESSIONAL documentation for the following code:\n\n"
+        "{final_code}\n\n"
+        "Documentation MUST include:\n"
+        "• **Overview**: What the code does\n"
+        "• **Features**: Key functionality\n"
+        "• **Requirements & Dependencies**: What's needed to run it\n"
+        "• **Installation**: How to set it up\n"
+        "• **Usage Examples**: How to use it\n"
+        "• **Implementation Details**: How it works internally\n"
+        "• **Known Limitations**: Any constraints\n"
+        "• **Future Improvements**: Potential enhancements\n\n"
+        "Output MUST be clean, well-formatted markdown suitable for a README."
+    )),
+])
+
+
 def doc_writer_node(state: AgentState) -> AgentState:
     """Generate professional documentation."""
     check_interrupts(state["task_id"])
@@ -901,34 +929,12 @@ def doc_writer_node(state: AgentState) -> AgentState:
     # Use refined code if available, otherwise use generated code
     final_code = state.get("refined_code") or state["generated_code"]
     
-    prompt = f"""You are a Senior Technical Writer.
-
-Write PROFESSIONAL documentation for the following code:
-
-{final_code}
-
-Documentation MUST include:
-• **Overview**: What the code does
-• **Features**: Key functionality
-• **Requirements & Dependencies**: What's needed to run it
-• **Installation**: How to set it up
-• **Usage Examples**: How to use it
-• **Implementation Details**: How it works internally
-• **Known Limitations**: Any constraints
-• **Future Improvements**: Potential enhancements
-
-Output MUST be clean, well-formatted markdown suitable for a README.
-"""
-    
-    messages = [
-        SystemMessage(content="You are a documentation expert who creates clear, comprehensive technical documentation."),
-        HumanMessage(content=prompt)
-    ]
+    messages = _doc_writer_prompt.format_messages(final_code=final_code)
     
     try:
         # Use local model for documentation (cheaper)
         llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("doc_writer", ""))
-        response = llm.invoke(messages)
+        response = _trimmed_invoke(llm, messages)
         docs = response.content
         
         emit_event(state["task_id"], {
@@ -950,10 +956,9 @@ Output MUST be clean, well-formatted markdown suitable for a README.
         save_artifact(state["task_id"], "docs/README.md", docs)
         
         return {
-            **state,
             "documentation": docs,
             "current_agent": "doc_writer",
-            "messages": _buffered_messages(state, messages + [response]),
+            "messages": [response],  # new messages only
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -962,7 +967,6 @@ Output MUST be clean, well-formatted markdown suitable for a README.
             "error": f"Documentation generation failed: {str(e)}"
         })
         return {
-            **state,
             "documentation": "# Documentation\n\nFailed to generate documentation.",
             "error": str(e),
             "current_agent": "doc_writer"
@@ -1039,7 +1043,6 @@ def cli_tester_node(state: AgentState) -> AgentState:
         })
         
         return {
-            **state,
             "test_results": f"⚠️ Test SKIPPED\nReason: {language_detected} code detected\nSandbox only supports Python execution\nThe code appears syntactically valid but cannot be tested in Python sandbox.",
             "current_agent": "tester",
             "iteration_count": state.get("iteration_count", 0) + 1
@@ -1136,7 +1139,6 @@ def cli_tester_node(state: AgentState) -> AgentState:
     save_json_artifact(state["task_id"], f"test_outputs/run_{n:03d}.json", result)
     
     return {
-        **state,
         "test_results": "\n".join(test_results),
         "test_output": result,  # Store raw output for analyzer
         "current_agent": "tester",
@@ -1181,6 +1183,21 @@ def should_refine(state: AgentState) -> str:
 # ==========================================
 # NODE 7: TERMINAL ANALYZER
 # ==========================================
+
+_terminal_analyzer_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a smart debugger. Analyze runtime errors."),
+    ("human", (
+        "You are a Python Debugging Expert.\n\n"
+        "The code executed but failed with the following output:\n\n"
+        "RETURN CODE: {returncode}\n\n"
+        "STDOUT:\n{stdout}\n\n"
+        "STDERR:\n{stderr}\n\n"
+        "TRACEBACK:\n{traceback}\n\n"
+        "Analyze the error carefully."
+    )),
+])
+
+
 def terminal_analyzer_node(state: AgentState) -> AgentState:
     """
     Analyze the raw terminal output to determine if code needs refinement
@@ -1202,10 +1219,10 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
     returncode = test_output.get("returncode")
     stdout = test_output.get("stdout", "")
     stderr = test_output.get("stderr", "")
-    traceback = test_output.get("traceback", "")
+    traceback_str = test_output.get("traceback", "")
     
     # If successful, skip analysis — return structured PASS immediately
-    if returncode == 0 and not traceback:
+    if returncode == 0 and not traceback_str:
         pass_output = AnalysisOutput(
             verdict="PASS", error_type="none", root_cause="", fix_hints=[]
         )
@@ -1214,7 +1231,6 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
             "message": "✅ Analyzer: Code executed successfully. No fix needed."
         })
         return {
-            **state,
             "analysis": "PASS",
             "analysis_structured": pass_output.model_dump(),
             "decision": "NO",
@@ -1222,45 +1238,26 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
         }
     
     # Analyze the error with structured output
-    parser = PydanticOutputParser(pydantic_object=AnalysisOutput)
-    
-    prompt = f"""You are a Python Debugging Expert.
-    
-The code executed but failed with the following output:
-
-RETURN CODE: {returncode}
-
-STDOUT:
-{stdout}
-
-STDERR:
-{stderr}
-
-TRACEBACK:
-{traceback}
-
-Analyze the error carefully.
-
-{parser.get_format_instructions()}
-"""
-
-    messages = [
-        SystemMessage(content="You are a smart debugger. Analyze runtime errors."),
-        HumanMessage(content=prompt)
-    ]
+    messages = _terminal_analyzer_prompt.format_messages(
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+        traceback=traceback_str,
+    )
     
     try:
         llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("analyzer", ""))
-        response = llm.invoke(messages)
+        structured_llm = llm.with_structured_output(AnalysisOutput)
         
         # Parse structured output, fall back to raw string
         analysis_output_dict = None
         try:
-            result: AnalysisOutput = parser.parse(response.content)
+            result: AnalysisOutput = structured_llm.invoke(messages)
             analysis = f"{result.verdict}: {result.root_cause}" if result.verdict == "FIX_REQUIRED" else "PASS"
             analysis_output_dict = result.model_dump()
         except Exception:
-            # Fallback: LLM didn't produce valid JSON
+            # Fallback: structured output failed, try raw invoke
+            response = _trimmed_invoke(llm, messages)
             analysis = response.content.strip()
         
         emit_event(state["task_id"], {
@@ -1279,11 +1276,10 @@ Analyze the error carefully.
         })
         
         return {
-            **state,
             "analysis": analysis,
             "analysis_structured": analysis_output_dict,
             "current_agent": "analyzer",
-            "messages": _buffered_messages(state, messages + [response])
+            "messages": messages  # new messages only
         }
         
     except Exception as e:
@@ -1298,7 +1294,6 @@ Analyze the error carefully.
             fix_hints=[]
         )
         return {
-            **state,
             "analysis": "FIX_REQUIRED: Analyzer failed, please check logs manually.",
             "analysis_structured": fallback_output.model_dump(),
             "error": str(e),

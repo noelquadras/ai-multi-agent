@@ -5,7 +5,7 @@ This defines the shared state that flows through all agent nodes.
 
 from typing import TypedDict, Annotated, Sequence, Optional
 from langchain_core.messages import BaseMessage
-import operator
+from langgraph.graph.message import add_messages
 
 
 class AgentState(TypedDict):
@@ -44,7 +44,7 @@ class AgentState(TypedDict):
     refiner_memory: Optional[list[str]]  # "Iteration N: fixed [...]" entries
 
     # Metadata
-    messages: Annotated[Sequence[BaseMessage], operator.add]
+    messages: Annotated[Sequence[BaseMessage], add_messages]
     current_agent: str
     error: Optional[str]
     iteration_count: int

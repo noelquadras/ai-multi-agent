@@ -1,8 +1,11 @@
 # main.py
 import os
 import re
+import sqlite3
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.pregel._retry import RetryPolicy
 from agents.state import AgentState
 from agents.nodes import (
     spec_writer_node,
@@ -11,8 +14,6 @@ from agents.nodes import (
     decision_maker_node,
     code_refiner_node,
     doc_writer_node,
-    cli_tester_node,
-    should_refine,
     cli_tester_node,
     terminal_analyzer_node,
     should_refine,
@@ -32,6 +33,14 @@ os.environ["OPENAI_MODEL_NAME"] = "mistral:7b-instruct"
 # Groq API configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+# Durable checkpointer — persists graph state for resume-on-crash & replay
+# NOTE: from_conn_string() is a context manager; use sqlite3.connect() directly.
+_db_conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
+_checkpointer = SqliteSaver(conn=_db_conn)
+
+# Retry policy for transient LLM failures (timeouts, rate-limits, 503s)
+_llm_retry = RetryPolicy(max_attempts=3, initial_interval=1.0, backoff_factor=2.0)
+
 
 def clean_output(text: str) -> str:
     """Clean markdown code blocks from text."""
@@ -40,9 +49,13 @@ def clean_output(text: str) -> str:
     return re.sub(r"```[a-zA-Z]*|```", "", text).strip()
 
 
+# Compiled graph cache — avoids re-building on every task
+_compiled_graphs: dict[bool, object] = {}
+
+
 def create_agent_graph(include_cli_test: bool = True):
     """
-    Create the LangGraph state graph for the agent workflow.
+    Create (or return cached) the compiled LangGraph state graph.
     
     Graph structure:
         START → spec_writer → generate → review → decide → [conditional] → test → document → END
@@ -52,20 +65,23 @@ def create_agent_graph(include_cli_test: bool = True):
     Args:
         include_cli_test: Whether to include CLI testing node (patent feature)
     """
+    if include_cli_test in _compiled_graphs:
+        return _compiled_graphs[include_cli_test]
+
     # Initialize graph with state schema
     workflow = StateGraph(AgentState)
     
-    # Add nodes (each agent is a node)
-    workflow.add_node("spec_writer", spec_writer_node)
-    workflow.add_node("generate", code_generator_node)
-    workflow.add_node("review", code_reviewer_node)
-    workflow.add_node("decide", decision_maker_node)
-    workflow.add_node("refine", code_refiner_node)
-    workflow.add_node("document", doc_writer_node)
+    # Add nodes — LLM-calling nodes get a retry policy for transient failures
+    workflow.add_node("spec_writer", spec_writer_node, retry=_llm_retry)
+    workflow.add_node("generate", code_generator_node, retry=_llm_retry)
+    workflow.add_node("review", code_reviewer_node, retry=_llm_retry)
+    workflow.add_node("decide", decision_maker_node, retry=_llm_retry)
+    workflow.add_node("refine", code_refiner_node, retry=_llm_retry)
+    workflow.add_node("document", doc_writer_node, retry=_llm_retry)
     
     if include_cli_test:
-        workflow.add_node("test", cli_tester_node)
-        workflow.add_node("analyze_test", terminal_analyzer_node)
+        workflow.add_node("test", cli_tester_node)  # no retry — deterministic executor
+        workflow.add_node("analyze_test", terminal_analyzer_node, retry=_llm_retry)
     
     # Define edges (workflow connections)
     workflow.set_entry_point("spec_writer")
@@ -112,7 +128,9 @@ def create_agent_graph(include_cli_test: bool = True):
     
     workflow.add_edge("document", END)
     
-    return workflow.compile()
+    compiled = workflow.compile(checkpointer=_checkpointer)
+    _compiled_graphs[include_cli_test] = compiled
+    return compiled
 
 
 def run_software_crew(requirements: str, task_id: str, model: str = "ollama", agent_models: Optional[Dict[str, str]] = None, benchmark_test_code: Optional[str] = None):
@@ -165,10 +183,20 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "refiner_memory": None,
     }
     
-    print(f"\n--- RUNNING LANGGRAPH WORKFLOW (Model: {model}) ---\n", flush=True)
+    # Execute the graph — thread_id enables checkpointer resume/replay
+    config = {"configurable": {"thread_id": task_id}}
     
-    # Execute the graph
-    final_state = graph.invoke(initial_state)
+    # Check if a checkpoint already exists for this task
+    existing_state = graph.get_state(config)
+    
+    if existing_state.values:
+        print(f"\n--- RESUMING LANGGRAPH WORKFLOW (Task: {task_id}) ---\n", flush=True)
+        # Pass None as input to resume exactly where it left off
+        final_state = graph.invoke(None, config=config)
+    else:
+        print(f"\n--- STARTING NEW LANGGRAPH WORKFLOW (Task: {task_id}) ---\n", flush=True)
+        # Pass initial_state for a fresh run
+        final_state = graph.invoke(initial_state, config=config)
     
     print("\n--- WORKFLOW COMPLETE ---\n", flush=True)
     
