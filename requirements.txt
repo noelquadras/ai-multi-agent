@@ -2,6 +2,7 @@
 
 # LLM & Orchestration
 langgraph
+langgraph-checkpoint-sqlite
 langchain
 langchain-community
 langchain-core
