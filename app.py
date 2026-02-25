@@ -17,6 +17,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import httpx
 from fastapi import WebSocket, WebSocketDisconnect
+from langgraph.types import Command
 from terminal_service import manager as terminal_manager
 
 # Import database layer
@@ -90,8 +91,11 @@ class QueueLogger:
 def run_crew(task_id: str, prompt: str, model: str, agent_models: Optional[Dict[str, str]] = None):
     # Lazy import to avoid circular dependency if main imports app
     from main import run_software_crew
+    from agents.cancellation import cancellation_registry
+    
     old_stdout = sys.stdout
     sys.stdout = QueueLogger(task_id)
+    cancellation_registry.register(task_id)
 
     try:
         update_task_status(task_id, "running")
@@ -102,10 +106,57 @@ def run_crew(task_id: str, prompt: str, model: str, agent_models: Optional[Dict[
         
         update_task_status(task_id, "completed")
         emit_event(task_id, {"type": "task_completed"})
+    except RuntimeError as e:
+        if "cancelled" in str(e).lower():
+            update_task_status(task_id, "cancelled")
+            emit_event(task_id, {"type": "task_cancelled", "message": str(e)})
+        else:
+            update_task_status(task_id, "failed")
+            emit_event(task_id, {"type": "system_error", "error": str(e)})
     except Exception as e:
         update_task_status(task_id, "failed")
         emit_event(task_id, {"type": "system_error", "error": str(e)})
     finally:
+        cancellation_registry.unregister(task_id)
+        sys.stdout = old_stdout
+
+
+def _resume_graph(task_id: str):
+    """
+    Resume a graph that was suspended via interrupt().
+
+    Spawns in a background thread.  Uses Command(resume=True) so LangGraph
+    re-enters the exact node that called interrupt().
+    """
+    from main import create_agent_graph
+    from agents.cancellation import cancellation_registry
+
+    old_stdout = sys.stdout
+    sys.stdout = QueueLogger(task_id)
+    # Re-register cancellation token (the original was cleaned up when the
+    # previous thread finished)
+    cancellation_registry.register(task_id)
+
+    try:
+        graph = create_agent_graph(include_cli_test=True)
+        config = {"configurable": {"thread_id": task_id}}
+        # Command(resume=True) tells LangGraph to resume from the interrupt
+        graph.invoke(Command(resume=True), config=config)
+
+        update_task_status(task_id, "completed")
+        emit_event(task_id, {"type": "task_completed"})
+    except RuntimeError as e:
+        if "cancelled" in str(e).lower():
+            update_task_status(task_id, "cancelled")
+            emit_event(task_id, {"type": "task_cancelled", "message": str(e)})
+        else:
+            update_task_status(task_id, "failed")
+            emit_event(task_id, {"type": "system_error", "error": str(e)})
+    except Exception as e:
+        update_task_status(task_id, "failed")
+        emit_event(task_id, {"type": "system_error", "error": str(e)})
+    finally:
+        cancellation_registry.unregister(task_id)
         sys.stdout = old_stdout
 
 # =========================
@@ -282,9 +333,33 @@ async def pause_task(task_id: str):
 
 @app.post("/api/task/{task_id}/resume")
 async def resume_task(task_id: str):
+    """Resume a paused task by re-entering the graph at the interrupted node."""
     update_task_status(task_id, "running")
     emit_event(task_id, {"type": "task_resumed", "message": "Resumed by user"})
+    # Spawn a new thread to resume the graph from the interrupt point
+    threading.Thread(target=_resume_graph, args=(task_id,), daemon=True).start()
     return {"status": "running"}
+
+@app.post("/api/task/{task_id}/cancel")
+async def cancel_task(task_id: str):
+    """Cooperative cancellation — stops the task at the next node boundary.
+    
+    If the task is currently paused (suspended via interrupt()), we need to
+    resume the graph so that check_interrupts can see the cancellation flag
+    and raise RuntimeError.  If it's running, the registry flag alone is enough.
+    """
+    from agents.cancellation import cancellation_registry
+    cancellation_registry.cancel(task_id)
+    update_task_status(task_id, "cancelled")
+    emit_event(task_id, {"type": "task_cancelled", "message": "Cancelled by user"})
+
+    # If the graph is suspended at an interrupt(), wake it up so it can
+    # observe the cancellation flag and exit cleanly.
+    task_state = get_task_status(task_id)
+    if task_state and task_state.get("status") in ("paused", "cancelled"):
+        threading.Thread(target=_resume_graph, args=(task_id,), daemon=True).start()
+
+    return {"status": "cancel_requested"}
 
 # --- Updated Human-in-the-Loop Routes ---
 @app.post("/api/task/{task_id}/approve")
@@ -292,11 +367,11 @@ async def approve_code(task_id: str):
     # Set signal to APPROVED
     update_decision_signal(task_id, "APPROVED")
     
-    # If it was paused (waiting for approval), resume it
-    # If it was paused (waiting for approval), resume it
+    # If it was paused (waiting for approval), resume the graph
     task_state = get_task_status(task_id)
     if task_state and task_state.get("status") == "paused":
         update_task_status(task_id, "running")
+        threading.Thread(target=_resume_graph, args=(task_id,), daemon=True).start()
     
     emit_event(task_id, {
         "type": "human_approval",
@@ -317,11 +392,11 @@ async def reject_code(task_id: str, body: RejectRequest = None):
     if body and body.feedback:
         update_rejection_feedback(task_id, body.feedback)
     
-    # If it was paused, resume it
-    # If it was paused, resume it
+    # If it was paused, resume the graph
     task_state = get_task_status(task_id)
     if task_state and task_state.get("status") == "paused":
         update_task_status(task_id, "running")
+        threading.Thread(target=_resume_graph, args=(task_id,), daemon=True).start()
     
     emit_event(task_id, {
         "type": "human_approval",
@@ -401,6 +476,31 @@ async def get_all_history():
         cursor.execute("SELECT * FROM tasks ORDER BY created_at DESC")
         cols = [column[0] for column in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+# --- ARTIFACT ROUTES ---
+
+@app.get("/api/task/{task_id}/artifacts")
+async def get_task_artifacts(task_id: str):
+    """Returns a manifest of all disk-persisted artifacts for a task."""
+    from agents.artifacts import list_artifacts
+    manifest = list_artifacts(task_id)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="No artifacts found for this task")
+    return {"task_id": task_id, "artifacts": manifest}
+
+
+@app.get("/api/task/{task_id}/artifacts/{artifact_path:path}")
+async def get_artifact_content(task_id: str, artifact_path: str):
+    """Download a specific artifact file."""
+    from agents.artifacts import load_artifact
+    # Security: block path traversal
+    if ".." in artifact_path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    content = load_artifact(task_id, artifact_path)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return {"task_id": task_id, "path": artifact_path, "content": content}
 
 @app.get("/api/models")
 async def get_available_models():

@@ -5,7 +5,7 @@ This defines the shared state that flows through all agent nodes.
 
 from typing import TypedDict, Annotated, Sequence, Optional
 from langchain_core.messages import BaseMessage
-import operator
+from langgraph.graph.message import add_messages
 
 
 class AgentState(TypedDict):
@@ -31,8 +31,20 @@ class AgentState(TypedDict):
     test_output: Optional[dict] # Raw execution results (returncode, stdout, stderr)
     analysis: str # Analyzer's reasoning and instructions
 
+    # Spec writer output (MetaGPT artifact-first pattern)
+    spec_doc_path: Optional[str]       # Path to persisted spec JSON
+    spec_structured: Optional[dict]    # SpecOutput dict
+
+    # Structured outputs (Pydantic model_dump dicts)
+    review_report_structured: Optional[dict]    # ReviewOutput dict
+    decision_output: Optional[dict]   # Serialised DecisionOutput
+    analysis_structured: Optional[dict]         # AnalysisOutput dict
+
+    # Per-agent memory (ListMemory pattern)
+    refiner_memory: Optional[list[str]]  # "Iteration N: fixed [...]" entries
+
     # Metadata
-    messages: Annotated[Sequence[BaseMessage], operator.add]
+    messages: Annotated[Sequence[BaseMessage], add_messages]
     current_agent: str
     error: Optional[str]
     iteration_count: int

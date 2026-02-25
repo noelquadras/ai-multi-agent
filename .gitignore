@@ -72,6 +72,9 @@ data/benchmarks/results_*.json
 # ─── Temporary execution sandbox ─────────────────────────────────────────────
 /temp_run/
 
+# ─── Task artifacts (generated per-run) ──────────────────────────────────────
+/tasks/
+
 # ─── Internal / draft docs (not for public repo) ─────────────────────────────
 AGENTS.md
 new_README.md
