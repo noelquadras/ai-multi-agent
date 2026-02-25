@@ -188,7 +188,10 @@ def manager_router(state: AgentState):
     })
 
     try:
-        llm = get_llm(for_heavy_task=False)
+        llm = get_llm(
+            for_heavy_task=False, 
+            base_model=state.get("model", "ollama")
+        )
         structured_llm = llm.with_structured_output(ManagerDecision)
 
         prompt_messages = _manager_prompt.format_messages(

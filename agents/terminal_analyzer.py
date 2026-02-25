@@ -89,7 +89,11 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
     )
     
     try:
-        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("analyzer", ""))
+        llm = get_llm(
+            for_heavy_task=True, 
+            override_model=state.get("agent_models", {}).get("tester", ""),
+            base_model=state.get("model", "ollama")
+        )
         structured_llm = llm.with_structured_output(AnalysisOutput)
         
         analysis_output_dict = None

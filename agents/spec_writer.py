@@ -57,7 +57,11 @@ def spec_writer_node(state: AgentState) -> AgentState:
     messages = _spec_writer_prompt.format_messages(requirements=state["requirements"])
     
     try:
-        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("spec_writer", ""))
+        llm = get_llm(
+            for_heavy_task=False, 
+            override_model=state.get("agent_models", {}).get("spec_writer", ""),
+            base_model=state.get("model", "ollama")
+        )
         structured_llm = llm.with_structured_output(SpecOutput)
         
         spec_structured = None

@@ -132,7 +132,11 @@ def code_refiner_node(state: AgentState) -> AgentState:
     
     try:
         # Use heavy-duty model for refining
-        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("refiner", ""))
+        llm = get_llm(
+            for_heavy_task=True, 
+            override_model=state.get("agent_models", {}).get("refiner", ""),
+            base_model=state.get("model", "ollama")
+        )
         response = _trimmed_invoke(llm, messages)
         refined_code = response.content
         

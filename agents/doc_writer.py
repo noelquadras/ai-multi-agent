@@ -54,7 +54,11 @@ def doc_writer_node(state: AgentState) -> AgentState:
     
     try:
         # Use local model for documentation (cheaper)
-        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("doc_writer", ""))
+        llm = get_llm(
+            for_heavy_task=False, 
+            override_model=state.get("agent_models", {}).get("doc_writer", ""),
+            base_model=state.get("model", "ollama")
+        )
         response = _trimmed_invoke(llm, messages)
         docs = response.content
         

@@ -28,22 +28,26 @@ _current_model = "ollama"
 _groq_api_key = ""
 
 
-def get_ollama_llm():
+def get_ollama_llm(model_name: str = None):
     """Get or create Ollama LLM instance."""
     global _ollama_llm, _current_model
     
-    # Determine model name
-    # If _current_model is "ollama" (generic) or "groq", fallback to default
-    # Otherwise use the specific model name provided (e.g. "llama3:latest")
-    model_name = "mistral:7b-instruct"
-    if _current_model and _current_model not in ["ollama", "groq"]:
-        model_name = _current_model
+    # Determine which model to use:
+    # 1. Explicit argument (highest priority)
+    # 2. Global current_model (from set_model_config)
+    # 3. Default fallback
+    target_model = model_name or _current_model
+    
+    # If the choice is generic "ollama", we need a concrete model tag
+    if not target_model or target_model == "ollama":
+        import os
+        target_model = os.getenv("OLLAMA_MODEL", "mistral:7b-instruct")
         
     # Re-initialize if model changed or not initialized
-    if _ollama_llm is None or getattr(_ollama_llm, "model", "") != model_name:
-        print(f"Initializing Ollama with model: {model_name}")
+    if _ollama_llm is None or getattr(_ollama_llm, "model", "") != target_model:
+        print(f"Initializing Ollama with model: {target_model}")
         _ollama_llm = ChatOllama(
-            model=model_name,
+            model=target_model,
             base_url="http://localhost:11434",
             temperature=0.7
         )
@@ -88,14 +92,16 @@ def check_interrupts(task_id: str):
         interrupt({"reason": "paused", "task_id": task_id})
 
 
-def get_groq_llm():
+def get_groq_llm(model_name: str = "llama-3.3-70b-versatile"):
     """Get or create Groq LLM instance."""
     global _groq_llm, _groq_api_key
+    
+    # Use specified model or default to the most capable one
     if _groq_llm is None and _groq_api_key:
         try:
             from langchain_groq import ChatGroq
             _groq_llm = ChatGroq(
-                model="llama-3.3-70b-versatile",
+                model=model_name,
                 api_key=_groq_api_key,
                 temperature=0.7
             )
@@ -118,24 +124,19 @@ def set_model_config(model: str, groq_api_key: str = ""):
         get_groq_llm()  # Initialize immediately
 
 
-def get_llm(for_heavy_task: bool = False, override_model: str = ""):
+def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: str = ""):
     """
     Get the appropriate LLM based on configuration and task type.
     
     Args:
         for_heavy_task: If True, use the heavy-duty model (Groq for code gen).
-                       If False, can use lighter model for simple tasks.
-        override_model: If provided, specific model ID to use.
+        override_model: Specific model ID for this node (per-agent config).
+        base_model: Global model choice for this run (from frontend).
     """
-    # 1. Use override model if provided
+    # 1. Priority: Explicit override for this specific step/agent
     if override_model:
-        if "groq" in override_model.lower() or "llama" in override_model.lower():
-            # It's likely a cloud/groq model
-             if _groq_api_key:
-                from langchain_groq import ChatGroq
-                # Use the specific model name if possible, or fallback to default groq
-                model_name = "llama-3.3-70b-versatile"
-                return ChatGroq(model=model_name, api_key=_groq_api_key, temperature=0.7)
+        if "groq" in override_model.lower() or "llama" in override_model.lower() and _groq_api_key:
+            return get_groq_llm(model_name=override_model)
         
         # Assume it's a local Ollama model
         return ChatOllama(
@@ -144,10 +145,15 @@ def get_llm(for_heavy_task: bool = False, override_model: str = ""):
             temperature=0.7
         )
 
-    # 2. Fallback to global default logic
-    if _current_model == "groq" and for_heavy_task:
-        return get_groq_llm()
-    return get_ollama_llm()
+    # 2. Use the base model choice from the run if provided
+    current_choice = base_model or _current_model
+    
+    # 3. Decision logic: Groq for heavy tasks if selected
+    if current_choice == "groq" or "llama" in current_choice.lower():
+        if _groq_api_key:
+             return get_groq_llm()
+        
+    return get_ollama_llm(model_name=current_choice)
 
 
 def clean_code_output(text: str) -> str:

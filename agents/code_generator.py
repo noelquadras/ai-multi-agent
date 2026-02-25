@@ -79,7 +79,11 @@ def code_generator_node(state: AgentState) -> AgentState:
     
     try:
         # Use heavy-duty model for code generation
-        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("coder", ""))
+        llm = get_llm(
+            for_heavy_task=True, 
+            override_model=state.get("agent_models", {}).get("coder", ""),
+            base_model=state.get("model", "ollama")
+        )
         response = _trimmed_invoke(llm, messages)
         code = response.content
         

@@ -62,7 +62,11 @@ def code_reviewer_node(state: AgentState) -> AgentState:
     messages = _code_reviewer_prompt.format_messages(generated_code=state["generated_code"])
     
     try:
-        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("reviewer", ""))
+        llm = get_llm(
+            for_heavy_task=False, 
+            override_model=state.get("agent_models", {}).get("reviewer", ""),
+            base_model=state.get("model", "ollama")
+        )
         structured_llm = llm.with_structured_output(ReviewOutput)
         
         # Parse structured output, fall back to raw string
