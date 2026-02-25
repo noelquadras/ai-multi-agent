@@ -149,23 +149,27 @@ def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: 
     """
     # 1. Priority: Explicit override for this specific step/agent
     if override_model:
-        if ("groq" in override_model.lower() or "llama" in override_model.lower()) and _groq_api_key:
+        # Check if it's a Groq model (explicitly requested or a known Groq llama model)
+        # Avoid matching 'ollama' as 'llama'
+        is_groq = "groq" in override_model.lower() or \
+                  ("llama" in override_model.lower() and "ollama" not in override_model.lower())
+                  
+        if is_groq and _groq_api_key:
             return get_groq_llm(model_name=override_model)
         
-        # Assume it's a local Ollama model
-        return ChatOllama(
-            model=override_model,
-            base_url="http://localhost:11434",
-            temperature=0.7
-        )
+        # Default to local Ollama model
+        return get_ollama_llm(model_name=override_model)
 
     # 2. Use the base model choice from the run if provided
     current_choice = base_model or _current_model
     
-    # 3. Decision logic: Groq for heavy tasks if selected
-    if current_choice == "groq" or "llama" in current_choice.lower():
-        if _groq_api_key:
-             return get_groq_llm(model_name=current_choice)
+    # 3. Decision logic: Route to Groq if requested or if it's a cloud llama model
+    # Again, ensure 'ollama' doesn't trigger the 'llama' check
+    is_groq_choice = current_choice == "groq" or \
+                     ("llama" in current_choice.lower() and "ollama" not in current_choice.lower())
+
+    if is_groq_choice and _groq_api_key:
+        return get_groq_llm(model_name=current_choice)
         
     return get_ollama_llm(model_name=current_choice)
 

@@ -30,7 +30,7 @@ _spec_writer_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
-@subscribe(ActionType.TASK_START)
+@subscribe(ActionType.TASK_CLASSIFIED)
 def spec_writer_node(state: AgentState) -> AgentState:
     """
     Produce a technical spec BEFORE code generation.

@@ -21,6 +21,7 @@ from agents.nodes import (
     doc_writer_node,
     cli_tester_node,
     terminal_analyzer_node,
+    classify_task_node,
     set_model_config,
 )
 from typing import Dict, Optional
@@ -91,6 +92,7 @@ def create_agent_graph():
     workflow.add_node("document", doc_writer_node, retry=_llm_retry)
     workflow.add_node("test", cli_tester_node)  # no retry — deterministic executor
     workflow.add_node("analyze_test", terminal_analyzer_node, retry=_llm_retry)
+    workflow.add_node("classify_task", classify_task_node, retry=_llm_retry)
     
     # ── Edge wiring: Hub-and-Spoke ──────────────────────────────────────
     # Entry point: START → manager
@@ -98,7 +100,8 @@ def create_agent_graph():
     
     # Every spoke points back to the hub
     for node_name in ["spec_writer", "generate", "review", "decide",
-                      "refine", "document", "test", "analyze_test"]:
+                      "refine", "document", "test", "analyze_test",
+                      "classify_task"]:
         workflow.add_edge(node_name, "manager")
     
     # Manager routes via conditional edge — returns Send() objects or END
@@ -152,6 +155,8 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "iteration_count": 0,
         "debug_loop_count": 0,
         "total_tokens_used": None,
+        "task_profile": None,
+        "agent_metrics": {},
         # Spec writer output
         "spec_doc_path": None,
         "spec_structured": None,

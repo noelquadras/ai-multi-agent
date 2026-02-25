@@ -43,7 +43,7 @@ _code_generator_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
-@subscribe(ActionType.PRD_READY, ActionType.ANALYSIS_REGENERATE, node_name="generate")
+@subscribe(ActionType.PRD_READY, ActionType.TASK_CLASSIFIED, ActionType.ANALYSIS_REGENERATE, node_name="generate")
 def code_generator_node(state: AgentState) -> AgentState:
     """Generate initial code based on requirements and optional spec."""
     check_interrupts(state["task_id"])

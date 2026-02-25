@@ -22,6 +22,7 @@ from langchain_core.messages import AIMessage
 class ActionType(StrEnum):
     """All publishable action types in the system."""
     TASK_START          = "task_start"
+    TASK_CLASSIFIED     = "task_classified"
     PRD_READY           = "prd_ready"
     CODE_READY          = "code_ready"
     REVIEW_READY        = "review_ready"

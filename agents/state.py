@@ -3,9 +3,27 @@ State schema for LangGraph agent workflow.
 This defines the shared state that flows through all agent nodes.
 """
 
-from typing import TypedDict, Annotated, Sequence, Optional
+from typing import TypedDict, Annotated, Sequence, Optional, Literal
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
+
+
+class TaskProfile(TypedDict, total=False):
+    """
+    Classification of the task complexity and required execution path.
+    """
+    complexity: Literal["trivial", "standard", "complex"]
+    needs_spec: bool
+    needs_review: bool
+    needs_docs: bool
+    needs_testing: bool
+    rationale: str
+
+
+class AgentMetrics(TypedDict):
+    """Token usage and invocation metrics per agent."""
+    calls: int
+    tokens: int
 
 
 class AgentState(TypedDict):
@@ -21,6 +39,10 @@ class AgentState(TypedDict):
     agent_models: Optional[dict[str, str]]  # Specific models for each agent
     benchmark_test_code: Optional[str]  # Optional test code for benchmarking (e.g. HumanEval)
     
+    # Classification & Profiling
+    task_profile: Optional[TaskProfile]
+    agent_metrics: dict[str, AgentMetrics] # Per-agent usage tracking
+
     # Agent Outputs
     generated_code: str
     review_report: str
