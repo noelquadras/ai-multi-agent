@@ -10,6 +10,7 @@ from agents.state import AgentState
 from agents.schemas import ReviewOutput, AnalysisOutput
 from agents.memory import AgentMemory
 from agents.llm_config import check_interrupts, get_llm, clean_code_output, _trimmed_invoke
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event, get_rejection_feedback, update_rejection_feedback
 from tools.executor import execute
 
@@ -35,6 +36,7 @@ _code_refiner_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+@subscribe(ActionType.DECISION_REFINE, ActionType.ANALYSIS_FIX, node_name="refine")
 def code_refiner_node(state: AgentState) -> AgentState:
     """Refine code based on review feedback."""
     check_interrupts(state["task_id"])
@@ -189,7 +191,10 @@ def code_refiner_node(state: AgentState) -> AgentState:
             "refined_code": refined_code,
             "refiner_memory": new_memory,
             "current_agent": "refiner",
-            "messages": [response],  # new messages only
+            "messages": [make_action_message(
+                f"Refined code ({len(refined_code)} chars), fixed: {', '.join(issues_fixed[:2])}",
+                ActionType.CODE_REFINED, "refine"
+            )],
             "iteration_count": state.get("iteration_count", 0) + 1,
             # Increment debug loop count if we were triggered by the analyzer
             "debug_loop_count": (

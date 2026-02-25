@@ -8,10 +8,12 @@ This is the unique patent feature for automated testing/debugging.
 from agents.state import AgentState
 from agents.artifacts import save_json_artifact
 from agents.llm_config import check_interrupts, clean_code_output
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event
 from tools.executor import execute
 
 
+@subscribe(ActionType.DECISION_APPROVED, ActionType.CODE_REFINED, node_name="test")
 def cli_tester_node(state: AgentState) -> AgentState:
     """
     Test code in CLI and capture results.
@@ -78,9 +80,11 @@ def cli_tester_node(state: AgentState) -> AgentState:
             "message": "[AGENT_END tester]"
         })
         
+        skip_msg = f"⚠️ Test SKIPPED\nReason: {language_detected} code detected\nSandbox only supports Python execution\nThe code appears syntactically valid but cannot be tested in Python sandbox."
         return {
-            "test_results": f"⚠️ Test SKIPPED\nReason: {language_detected} code detected\nSandbox only supports Python execution\nThe code appears syntactically valid but cannot be tested in Python sandbox.",
+            "test_results": skip_msg,
             "current_agent": "tester",
+            "messages": [make_action_message(skip_msg, ActionType.TEST_COMPLETE, "test")],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     
@@ -178,5 +182,9 @@ def cli_tester_node(state: AgentState) -> AgentState:
         "test_results": "\n".join(test_results),
         "test_output": result,  # Store raw output for analyzer
         "current_agent": "tester",
+        "messages": [make_action_message(
+            "\n".join(test_results),
+            ActionType.TEST_COMPLETE, "test"
+        )],
         "iteration_count": state.get("iteration_count", 0) + 1
     }

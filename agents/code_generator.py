@@ -10,6 +10,7 @@ from agents.state import AgentState
 from agents.spec_schema import SpecOutput
 from agents.artifacts import save_artifact
 from agents.llm_config import check_interrupts, get_llm, clean_code_output, _trimmed_invoke
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event
 
 _code_generator_prompt = ChatPromptTemplate.from_messages([
@@ -42,6 +43,7 @@ _code_generator_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+@subscribe(ActionType.PRD_READY, ActionType.ANALYSIS_REGENERATE, node_name="generate")
 def code_generator_node(state: AgentState) -> AgentState:
     """Generate initial code based on requirements and optional spec."""
     check_interrupts(state["task_id"])
@@ -109,7 +111,10 @@ def code_generator_node(state: AgentState) -> AgentState:
         return {
             "generated_code": code,
             "current_agent": "coder",
-            "messages": [response],  # new messages only
+            "messages": [make_action_message(
+                f"Generated {len(code)} chars of code",
+                ActionType.CODE_READY, "generate"
+            )],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:

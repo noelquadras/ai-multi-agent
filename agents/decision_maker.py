@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.schemas import ReviewOutput, DecisionOutput
 from agents.llm_config import check_interrupts, get_llm, _trimmed_invoke
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event, get_task_status, update_decision_signal
 
 _decision_maker_prompt = ChatPromptTemplate.from_messages([
@@ -22,6 +23,16 @@ _decision_maker_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+# ── Thin verdict → action_type wrapper ──────────────────────────────────
+def _decision_to_action(decision: str) -> ActionType:
+    """Map a YES/NO decision verdict to the corresponding action type.
+    Routing logic lives here, NOT inside the LLM prompt."""
+    if "YES" in decision:
+        return ActionType.DECISION_REFINE
+    return ActionType.DECISION_APPROVED
+
+
+@subscribe(ActionType.REVIEW_READY, node_name="decide")
 def decision_maker_node(state: AgentState) -> AgentState:
     """
     Decide if code needs refinement.
@@ -112,25 +123,31 @@ def decision_maker_node(state: AgentState) -> AgentState:
                 rationale=rationale
             ).model_dump()
         
+        # ── Thin wrapper: verdict → action_type ────────────────────────────
+        action = _decision_to_action(decision)
+
         emit_event(state["task_id"], {
             "type": "log",
-            "message": f"Decision: {decision} — {rationale}"
+            "message": f"Decision: {decision} → {action} — {rationale}"
         })
-        
+
         emit_event(state["task_id"], {
             "type": "agent_end",
             "agent": "decision"
         })
-        
+
         emit_event(state["task_id"], {
             "type": "log",
             "message": f"[AGENT_END decision]"
         })
-        
+
         return {
             "decision": decision,
             "decision_output": decision_output_dict,
             "current_agent": "decision",
+            "messages": [make_action_message(
+                f"{decision}: {rationale}", action, "decide"
+            )],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:

@@ -10,6 +10,7 @@ from agents.state import AgentState
 from agents.schemas import ReviewOutput
 from agents.artifacts import save_json_artifact, save_artifact
 from agents.llm_config import check_interrupts, get_llm, _trimmed_invoke
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event
 
 
@@ -43,6 +44,7 @@ _code_reviewer_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+@subscribe(ActionType.CODE_READY, node_name="review")
 def code_reviewer_node(state: AgentState) -> AgentState:
     """Review generated code for issues using structured Pydantic output."""
     check_interrupts(state["task_id"])
@@ -98,11 +100,12 @@ def code_reviewer_node(state: AgentState) -> AgentState:
         else:
             save_artifact(state["task_id"], f"reviews/review_{n:03d}.txt", review)
         
+        review_summary = f"Review: score={review_output_dict['overall_score']}/10, verdict={review_output_dict['verdict']}" if review_output_dict else f"Review: {len(review)} chars (raw)"
         return {
             "review_report": review,
             "review_report_structured": review_output_dict,
             "current_agent": "reviewer",
-            "messages": messages,  # new messages only
+            "messages": [make_action_message(review_summary, ActionType.REVIEW_READY, "review")],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:

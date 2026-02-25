@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.artifacts import save_artifact
 from agents.llm_config import check_interrupts, get_llm, _trimmed_invoke
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event
 
 _doc_writer_prompt = ChatPromptTemplate.from_messages([
@@ -31,6 +32,7 @@ _doc_writer_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+@subscribe(ActionType.ANALYSIS_PASS, node_name="document")
 def doc_writer_node(state: AgentState) -> AgentState:
     """Generate professional documentation."""
     check_interrupts(state["task_id"])
@@ -77,7 +79,10 @@ def doc_writer_node(state: AgentState) -> AgentState:
         return {
             "documentation": docs,
             "current_agent": "doc_writer",
-            "messages": [response],  # new messages only
+            "messages": [make_action_message(
+                f"Documentation generated ({len(docs)} chars)",
+                ActionType.DOCS_READY, "document"
+            )],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:

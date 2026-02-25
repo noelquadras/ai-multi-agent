@@ -8,6 +8,11 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.pregel._retry import RetryPolicy
 from agents.state import AgentState
 from agents.nodes import (
+    # Pub-Sub infrastructure
+    manager_node,
+    manager_router,
+    registry,
+    # Node functions (import triggers @subscribe registration)
     spec_writer_node,
     code_generator_node,
     code_reviewer_node,
@@ -16,9 +21,7 @@ from agents.nodes import (
     doc_writer_node,
     cli_tester_node,
     terminal_analyzer_node,
-    should_refine,
-    should_refine_after_analysis,
-    set_model_config
+    set_model_config,
 )
 from typing import Dict, Optional
 from database import emit_event
@@ -50,86 +53,63 @@ def clean_output(text: str) -> str:
 
 
 # Compiled graph cache — avoids re-building on every task
-_compiled_graphs: dict[bool, object] = {}
+_compiled_graph = None
 
 
-def create_agent_graph(include_cli_test: bool = True):
+def create_agent_graph():
     """
     Create (or return cached) the compiled LangGraph state graph.
     
-    Graph structure:
-        START → spec_writer → generate → review → decide → [conditional] → test → document → END
-                                                            ↓
-                                                         refine → test → document
+    Pub-Sub Architecture (MetaGPT-style Hub-and-Spoke):
+        START → manager (LLM-powered router)
+        Every agent node → manager
+        manager → (Send with filtered state) → subscriber nodes OR END
     
-    Args:
-        include_cli_test: Whether to include CLI testing node (patent feature)
+    Agents self-register via @subscribe decorators. To add a new agent:
+    1. Create a new node file in agents/
+    2. Decorate it with @subscribe(ActionType.SOME_ACTION)
+    3. Import it here — registration happens automatically
+    No edge changes needed.
     """
-    if include_cli_test in _compiled_graphs:
-        return _compiled_graphs[include_cli_test]
+    global _compiled_graph
+    if _compiled_graph is not None:
+        return _compiled_graph
 
     # Initialize graph with state schema
     workflow = StateGraph(AgentState)
     
-    # Add nodes — LLM-calling nodes get a retry policy for transient failures
+    # ── The Hub: LLM-powered Manager ────────────────────────────────────
+    workflow.add_node("manager", manager_node)
+    
+    # ── The Spokes: Agent nodes ─────────────────────────────────────────
+    # LLM-calling nodes get a retry policy for transient failures
     workflow.add_node("spec_writer", spec_writer_node, retry=_llm_retry)
     workflow.add_node("generate", code_generator_node, retry=_llm_retry)
     workflow.add_node("review", code_reviewer_node, retry=_llm_retry)
     workflow.add_node("decide", decision_maker_node, retry=_llm_retry)
     workflow.add_node("refine", code_refiner_node, retry=_llm_retry)
     workflow.add_node("document", doc_writer_node, retry=_llm_retry)
+    workflow.add_node("test", cli_tester_node)  # no retry — deterministic executor
+    workflow.add_node("analyze_test", terminal_analyzer_node, retry=_llm_retry)
     
-    if include_cli_test:
-        workflow.add_node("test", cli_tester_node)  # no retry — deterministic executor
-        workflow.add_node("analyze_test", terminal_analyzer_node, retry=_llm_retry)
+    # ── Edge wiring: Hub-and-Spoke ──────────────────────────────────────
+    # Entry point: START → manager
+    workflow.set_entry_point("manager")
     
-    # Define edges (workflow connections)
-    workflow.set_entry_point("spec_writer")
+    # Every spoke points back to the hub
+    for node_name in ["spec_writer", "generate", "review", "decide",
+                      "refine", "document", "test", "analyze_test"]:
+        workflow.add_edge(node_name, "manager")
     
-    # Sequential flow
-    workflow.add_edge("spec_writer", "generate")
-    workflow.add_edge("generate", "review")
-    workflow.add_edge("review", "decide")
+    # Manager routes via conditional edge — returns Send() objects or END
+    workflow.add_conditional_edges("manager", manager_router)
     
-    # Conditional edge: refine or skip to documentation
-    if include_cli_test:
-        workflow.add_conditional_edges(
-            "decide",
-            should_refine,
-            {
-                "refine": "refine",
-                "document": "test"  # Skip refine, go to test
-            }
-        )
-        workflow.add_edge("refine", "test")
-        
-        # New Analyzer Step
-        workflow.add_edge("test", "analyze_test")
-        
-        workflow.add_conditional_edges(
-            "analyze_test",
-            should_refine_after_analysis,
-            {
-                "refine": "refine",      # Targeted fix
-                "generate": "generate",  # Full regeneration (HandoffMessage pattern)
-                "document": "document"   # Move forward
-            }
-        )
-    else:
-        workflow.add_conditional_edges(
-            "decide",
-            should_refine,
-            {
-                "refine": "refine",
-                "document": "document"
-            }
-        )
-        workflow.add_edge("refine", "document")
-    
-    workflow.add_edge("document", END)
+    # Log the subscription table for debugging
+    subs = registry.all_subscriptions()
+    print(f"📋 Subscription Table: {subs}", flush=True)
     
     compiled = workflow.compile(checkpointer=_checkpointer)
-    _compiled_graphs[include_cli_test] = compiled
+    _compiled_graph = compiled
     return compiled
 
 
@@ -150,8 +130,8 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
     # Configure model for this run
     set_model_config(model, GROQ_API_KEY)
     
-    # Create the graph with CLI testing enabled
-    graph = create_agent_graph(include_cli_test=True)
+    # Create the graph
+    graph = create_agent_graph()
     
     # Initial state
     initial_state: AgentState = {

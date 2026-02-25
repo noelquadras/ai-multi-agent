@@ -11,6 +11,7 @@ from agents.state import AgentState
 from agents.spec_schema import SpecOutput
 from agents.artifacts import save_artifact
 from agents.llm_config import check_interrupts, get_llm
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event
 
 _spec_writer_prompt = ChatPromptTemplate.from_messages([
@@ -29,6 +30,7 @@ _spec_writer_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+@subscribe(ActionType.TASK_START)
 def spec_writer_node(state: AgentState) -> AgentState:
     """
     Produce a technical spec BEFORE code generation.
@@ -93,11 +95,12 @@ def spec_writer_node(state: AgentState) -> AgentState:
         })
         
         # Return only new messages — add_messages reducer handles appending
+        summary = f"Spec complete: {spec_structured.get('complexity_estimate', 'unknown')} complexity" if spec_structured else "Spec complete (unstructured)"
         return {
             "spec_doc_path": spec_doc_path,
             "spec_structured": spec_structured,
             "current_agent": "spec_writer",
-            "messages": messages,  # new messages only; reducer appends
+            "messages": [make_action_message(summary, ActionType.PRD_READY, "spec_writer")],
         }
     except Exception as e:
         emit_event(state["task_id"], {
