@@ -14,6 +14,7 @@ import os
 import json
 from typing import Optional
 from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
+from langgraph.types import interrupt, Command
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 from agents.state import AgentState
@@ -23,7 +24,6 @@ from agents.termination import DEFAULT_TERMINATION
 from agents.artifacts import save_artifact, save_json_artifact
 from agents.memory import AgentMemory
 from database import emit_event, get_task_status, update_decision_signal, clear_decision_signal, get_rejection_feedback, update_rejection_feedback
-import time
 from tools.executor import execute
 
 # ===========================================
@@ -63,46 +63,41 @@ def get_ollama_llm():
 from agents.cancellation import cancellation_registry
 
 
-# TODO: Migrate check_interrupts to LangGraph's native interrupt() and Command primitives.
-# Instead of polling the DB in a blocking sleep loop (which ties up a thread),
-# use `from langgraph.types import interrupt, Command`:
-#   - Replace the `while True: ... time.sleep(1)` pause-polling with
-#     `interrupt({"reason": "paused", "task_id": task_id})`, which suspends
-#     the graph execution without holding a thread.
-#   - The external resume signal (from the UI/API) would call
-#     `graph.update_state(thread_id, command=Command(resume=...))` to
-#     re-enter the graph at the interrupted node.
-#   - Cancellation can be handled by resuming with a Command that routes
-#     to a terminal "cancelled" node, or by simply not resuming.
-# This eliminates the sleep-loop entirely, improving thread efficiency
-# under high concurrency (many paused tasks won't each block a thread).
 def check_interrupts(task_id: str):
     """
-    Checks DB for pause status and cancellation registry.
-    Called at the start of every node for cooperative cancellation.
+    Check for cancellation and pause status using LangGraph-native primitives.
+
+    Called at the start of every node for cooperative control:
+      - **Cancellation** is still handled via the in-process
+        ``cancellation_registry`` (threading.Event) because it needs
+        sub-second latency.
+      - **Pause** now uses ``interrupt()`` from ``langgraph.types``.
+        Instead of blocking a thread in a ``while True: time.sleep(1)``
+        loop, ``interrupt()`` suspends graph execution and persists the
+        current state to the checkpointer.  The thread is released
+        immediately.  When the UI/API resumes the task it calls
+        ``graph.invoke(Command(resume=True), config)`` which re-enters
+        the graph at exactly the node that was interrupted.
     """
-    # Cooperative cancellation (ExternalTermination pattern)
+    # 1. Cooperative cancellation (ExternalTermination pattern)
     if cancellation_registry.is_cancelled(task_id):
         raise RuntimeError(f"Task {task_id} cancelled by user")
-    
-    while True:
-        state = get_task_status(task_id)
-        if not state:
-            break
-        
-        status = state.get("status")
-        if status == "paused":
-            # Check cancellation while paused too
-            if cancellation_registry.is_cancelled(task_id):
-                raise RuntimeError(f"Task {task_id} cancelled by user")
-            time.sleep(1)
-            continue
-        
-        if status == "failed" or status == "completed":
-            # Stop processing
-            raise Exception(f"Task stopped with status: {status}")
-            
-        break
+
+    # 2. Check DB for terminal / paused status
+    db_state = get_task_status(task_id)
+    if not db_state:
+        return  # Task row missing — nothing to check
+
+    status = db_state.get("status")
+
+    if status in ("failed", "completed", "cancelled"):
+        raise RuntimeError(f"Task stopped with status: {status}")
+
+    if status == "paused":
+        # Suspend the graph without holding a thread.
+        # The checkpointer persists state; the API resumes with
+        # Command(resume=True) which re-enters this node.
+        interrupt({"reason": "paused", "task_id": task_id})
 
 
 
