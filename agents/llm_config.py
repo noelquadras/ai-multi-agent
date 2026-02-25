@@ -92,16 +92,29 @@ def check_interrupts(task_id: str):
         interrupt({"reason": "paused", "task_id": task_id})
 
 
-def get_groq_llm(model_name: str = "llama-3.3-70b-versatile"):
+def get_groq_llm(model_name: str = None):
     """Get or create Groq LLM instance."""
     global _groq_llm, _groq_api_key
     
-    # Use specified model or default to the most capable one
-    if _groq_llm is None and _groq_api_key:
+    # Default model if none specified or generic "groq" provided
+    default_model = "llama-3.3-70b-versatile"
+    target_model = model_name or default_model
+    
+    if target_model.lower() == "groq":
+        target_model = default_model
+    
+    # Re-initialize if:
+    # 1. Not initialized yet
+    # 2. Model name changed
+    # 3. We have an API key
+    current_model_name = getattr(_groq_llm, "model_name", "") or getattr(_groq_llm, "model", "")
+    
+    if _groq_api_key and (_groq_llm is None or current_model_name != target_model):
         try:
             from langchain_groq import ChatGroq
+            print(f"Initializing Groq with model: {target_model}")
             _groq_llm = ChatGroq(
-                model=model_name,
+                model=target_model,
                 api_key=_groq_api_key,
                 temperature=0.7
             )
@@ -111,6 +124,7 @@ def get_groq_llm(model_name: str = "llama-3.3-70b-versatile"):
         except Exception as e:
             print(f"Warning: Could not initialize Groq: {e}. Using Ollama.")
             return get_ollama_llm()
+            
     return _groq_llm or get_ollama_llm()
 
 
@@ -135,7 +149,7 @@ def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: 
     """
     # 1. Priority: Explicit override for this specific step/agent
     if override_model:
-        if "groq" in override_model.lower() or "llama" in override_model.lower() and _groq_api_key:
+        if ("groq" in override_model.lower() or "llama" in override_model.lower()) and _groq_api_key:
             return get_groq_llm(model_name=override_model)
         
         # Assume it's a local Ollama model
@@ -151,7 +165,7 @@ def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: 
     # 3. Decision logic: Groq for heavy tasks if selected
     if current_choice == "groq" or "llama" in current_choice.lower():
         if _groq_api_key:
-             return get_groq_llm()
+             return get_groq_llm(model_name=current_choice)
         
     return get_ollama_llm(model_name=current_choice)
 
