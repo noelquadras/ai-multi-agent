@@ -65,6 +65,12 @@ class AgentState(TypedDict):
     # Per-agent memory (ListMemory pattern)
     refiner_memory: Optional[list[str]]  # "Iteration N: fixed [...]" entries
 
+    # Orchestrator fields (autonomous LLM-driven orchestration)
+    plan: Optional[list[dict]]                # PlanStep dicts — dynamic execution plan
+    pending_dispatches: Optional[list[str]]   # Agent names to dispatch next (set by orchestrator)
+    orchestrator_history: Optional[list[dict]] # Command audit trail [{command, args, rationale}]
+    orchestrator_thinking: Optional[str]       # Last reasoning chain (for UI/debug)
+
     # Metadata
     messages: Annotated[Sequence[BaseMessage], add_messages]
     current_agent: str

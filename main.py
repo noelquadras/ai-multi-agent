@@ -9,8 +9,8 @@ from langgraph.pregel._retry import RetryPolicy
 from agents.state import AgentState
 from agents.nodes import (
     # Pub-Sub infrastructure
-    manager_node,
-    manager_router,
+    orchestrator_node,
+    orchestrator_router,
     registry,
     # Node functions (import triggers @subscribe registration)
     spec_writer_node,
@@ -61,16 +61,10 @@ def create_agent_graph():
     """
     Create (or return cached) the compiled LangGraph state graph.
     
-    Pub-Sub Architecture (MetaGPT-style Hub-and-Spoke):
-        START → manager (LLM-powered router)
-        Every agent node → manager
-        manager → (Send with filtered state) → subscriber nodes OR END
-    
-    Agents self-register via @subscribe decorators. To add a new agent:
-    1. Create a new node file in agents/
-    2. Decorate it with @subscribe(ActionType.SOME_ACTION)
-    3. Import it here — registration happens automatically
-    No edge changes needed.
+    Autonomous Orchestrator Architecture:
+        START → orchestrator (LLM-driven think→act loop)
+        Every agent node → orchestrator
+        orchestrator → (Send with filtered state) → pending agents OR END
     """
     global _compiled_graph
     if _compiled_graph is not None:
@@ -79,8 +73,8 @@ def create_agent_graph():
     # Initialize graph with state schema
     workflow = StateGraph(AgentState)
     
-    # ── The Hub: LLM-powered Manager ────────────────────────────────────
-    workflow.add_node("manager", manager_node)
+    # ── The Hub: Autonomous Orchestrator ────────────────────────────────
+    workflow.add_node("orchestrator", orchestrator_node)
     
     # ── The Spokes: Agent nodes ─────────────────────────────────────────
     # LLM-calling nodes get a retry policy for transient failures
@@ -95,21 +89,24 @@ def create_agent_graph():
     workflow.add_node("classify_task", classify_task_node, retry=_llm_retry)
     
     # ── Edge wiring: Hub-and-Spoke ──────────────────────────────────────
-    # Entry point: START → manager
-    workflow.set_entry_point("manager")
+    # Entry point: START → orchestrator
+    workflow.set_entry_point("orchestrator")
     
     # Every spoke points back to the hub
     for node_name in ["spec_writer", "generate", "review", "decide",
                       "refine", "document", "test", "analyze_test",
                       "classify_task"]:
-        workflow.add_edge(node_name, "manager")
+        workflow.add_edge(node_name, "orchestrator")
     
-    # Manager routes via conditional edge — returns Send() objects or END
-    workflow.add_conditional_edges("manager", manager_router)
+    # Orchestrator decides its own conditional routing
+    workflow.add_conditional_edges("orchestrator", orchestrator_router)
     
     # Log the subscription table for debugging
     subs = registry.all_subscriptions()
-    print(f"📋 Subscription Table: {subs}", flush=True)
+    try:
+        print(f"Subscription Table: {subs}", flush=True)
+    except UnicodeEncodeError:
+        pass
     
     compiled = workflow.compile(checkpointer=_checkpointer)
     _compiled_graph = compiled
@@ -157,6 +154,10 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "total_tokens_used": None,
         "task_profile": None,
         "agent_metrics": {},
+        "plan": [],
+        "pending_dispatches": [],
+        "orchestrator_history": [],
+        "orchestrator_thinking": "",
         # Spec writer output
         "spec_doc_path": None,
         "spec_structured": None,
