@@ -8,6 +8,7 @@ LLM decides everything.
 """
 
 from typing import Literal, List
+from datetime import datetime
 import json
 import hashlib
 from pydantic import BaseModel
@@ -63,6 +64,7 @@ _react_prompt = ChatPromptTemplate.from_messages([
      "If you lack information or are unsure, you must guess or make an autonomous decision."
     ),
     ("human",
+     "Current Time: {time}\n\n"
      "Requirements:\n{requirements}\n\n"
      "Current Plan:\n{plan}\n\n"
      "Recent Events:\n{events}\n\n"
@@ -76,9 +78,11 @@ _react_prompt = ChatPromptTemplate.from_messages([
 # ─────────────────────────────────────────────────────────────
 
 def react_supervisor_node(state: AgentState) -> dict:
-    if state.get("debug_loop_count", 0) > 40:
-        return {"terminate": True}
     task_id = state.get("task_id")
+
+    if state.get("debug_loop_count", 0) > 40:
+        emit_event(task_id, {"type": "system_error", "error": "Supervisor reached max react loops (40) — terminating."})
+        return {"terminate": True}
 
     llm = get_llm(
         for_heavy_task=False,
@@ -98,6 +102,7 @@ def react_supervisor_node(state: AgentState) -> dict:
     recent_events = state.get("events", [])[-6:]
 
     messages = _react_prompt.format_messages(
+        time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         requirements=state.get("requirements", ""),
         plan=plan_summary,
         events=str(recent_events)
@@ -223,7 +228,8 @@ def react_supervisor_node(state: AgentState) -> dict:
 
     # ───────────── EndWorkflow ─────────────
     if name == "EndWorkflow":
-        emit_event(task_id, {"type": "log", "message": "🏁 Workflow ended"})
+        summary = args.get("summary", "Workflow completed")
+        emit_event(task_id, {"type": "log", "message": f"🏁 Workflow ended: {summary}"})
         return {"terminate": True, "react_meta": meta}
 
     return {"react_meta": meta}
