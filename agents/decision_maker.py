@@ -5,6 +5,7 @@ Decides if code needs refinement. Uses a deterministic path when structured
 review data is available; falls back to LLM only when needed.
 """
 
+from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.schemas import ReviewOutput, DecisionOutput
@@ -60,6 +61,10 @@ def decision_maker_node(state: AgentState) -> AgentState:
         
         decision_output_dict = None
         
+        llm_states = state.get("agent_states", {})
+        review_state = llm_states.get("review", {})
+        gen_state = llm_states.get("generate", {})
+        
         if decision_signal == "APPROVED":
             decision = "NO"
             rationale = "Human override: APPROVED"
@@ -78,10 +83,25 @@ def decision_maker_node(state: AgentState) -> AgentState:
             })
             update_decision_signal(state["task_id"], None)
             
-        elif state.get("review_report_structured"):
+        elif review_state.get("review_report_structured"):
             # 2. Deterministic decision from structured review — NO LLM call
-            review = ReviewOutput(**state["review_report_structured"])
-            decision = "YES" if review.verdict == "NEEDS_REFINE" else "NO"
+            # review = ReviewOutput(**review_state["review_report_structured"])
+            # decision = "YES" if review.verdict == "NEEDS_REFINE" else "NO"
+            review = ReviewOutput(**review_state["review_report_structured"])
+            make_iterations = state.get("make_iterations", 0)
+            score = review.overall_score
+            critical_count = len(review.critical_issues)
+
+            # Practical approval policy
+            if critical_count > 0:
+                decision = "YES"
+            elif score >= 7:
+                decision = "NO"
+            elif make_iterations >= 2:
+                decision = "NO"
+            else:
+                decision = "YES"
+
             rationale = (f"Deterministic: verdict={review.verdict}, "
                          f"score={review.overall_score}/10, "
                          f"{len(review.critical_issues)} critical issue(s)")
@@ -92,7 +112,7 @@ def decision_maker_node(state: AgentState) -> AgentState:
         else:
             # 3. Fallback: LLM decision with structured output
             messages = _decision_maker_prompt.format_messages(
-                generated_code=state["generated_code"]
+                generated_code=gen_state.get("generated_code", "")
             )
             llm = get_llm(
                 for_heavy_task=False, 
@@ -127,6 +147,18 @@ def decision_maker_node(state: AgentState) -> AgentState:
                 rationale=rationale
             ).model_dump()
         
+        # ── Mutate execution_plan IN MAKE ────────────────────────────
+        import copy
+        exec_plan = copy.deepcopy(state.get("execution_plan", []))
+        
+        for step in exec_plan:
+            if step["phase"] == "MAKE":
+                if decision == "NO":
+                    step["status"] = "completed"
+                else:
+                    step["status"] = "in_progress"
+                break
+                
         # ── Thin wrapper: verdict → action_type ────────────────────────────
         action = _decision_to_action(decision)
 
@@ -145,22 +177,39 @@ def decision_maker_node(state: AgentState) -> AgentState:
             "message": f"[AGENT_END decision]"
         })
 
-        return {
+        decide_data = {
             "decision": decision,
-            "decision_output": decision_output_dict,
-            "current_agent": "decision",
+            "decision_output": decision_output_dict
+        }
+
+        result_state = {
+            "agent_states": {"decide": decide_data},
             "messages": [make_action_message(
                 f"{decision}: {rationale}", action, "decide"
             )],
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            "execution_plan": exec_plan
         }
+        
+        if decision == "YES":
+            result_state["make_iterations"] = state.get("make_iterations", 0) + 1
+            
+        return result_state
     except Exception as e:
         emit_event(state["task_id"], {
             "type": "system_error",
             "error": f"Decision making failed: {str(e)}"
         })
         return {
-            "decision": "YES",  # Default to refinement on error
-            "error": str(e),
-            "current_agent": "decision"
+            "agent_states": {"decide": {"decision": "YES", "error": str(e)}},
+            "errors": [{
+                "type": "error",
+                "agent": "decision",
+                "timestamp": datetime.now().isoformat(),
+                "data": {"error": str(e)}
+            }],
+            "messages": [make_action_message(
+                f"Decision making failed: {str(e)}",
+                ActionType.DECISION_REFINE, "decide"
+            )]
         }

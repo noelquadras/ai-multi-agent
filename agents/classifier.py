@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 
 from agents.state import AgentState, TaskProfile
-from agents.action_types import ActionType, make_action_message
+from agents.action_types import ActionType, make_action_message, subscribe
 from agents.llm_config import get_llm
 from database import emit_event
 
@@ -38,21 +38,24 @@ class TaskProfileOutput(BaseModel):
 _classifier_prompt = ChatPromptTemplate.from_messages([
     ("system",
      "You are an expert software architect. Analyze the user requirements and determine the optimal, minimal execution path.\n\n"
-     "CRITICAL: You must provide your output as a structured tool call. \n"
-     "All boolean fields (needs_spec, needs_review, needs_docs, needs_testing) MUST be JSON booleans: use 'true' or 'false' (without quotes). \n"
-     "DO NOT use strings like \"true\" or \"false\".\n\n"
-     "Classification Criteria:\n"
-     "1. TRIVIAL:\n"
+     "CRITICAL: You must provide your output as a structured JSON object matching the requested schema.\n"
+     "The output MUST strictly contain exactly these keys: 'complexity', 'needs_spec', 'needs_review', 'needs_docs', 'needs_testing', 'rationale'.\n"
+     "- 'complexity' must be exactly one of: 'trivial', 'standard', 'complex' (must be lowercase).\n"
+     "- 'rationale' must be a brief string explaining your reasoning.\n"
+     "All boolean fields (needs_spec, needs_review, needs_docs, needs_testing) MUST be JSON booleans: use true or false (without quotes).\n"
+     "DO NOT use 'classification' or 'reasoning' as keys.\n\n"
+     "Complexity Criteria:\n"
+     "1. trivial:\n"
      "   - Single-file request, no architecture design, no persistence.\n"
      "   - No external APIs, clear output format.\n"
      "   - Example: 'print hello world', 'reverse a string'.\n"
-     "   - Flags: needs_spec=false, needs_review=false, needs_docs=false.\n\n"
-     "2. STANDARD:\n"
+     "   - Flags: needs_spec=false, needs_review=false, needs_docs=false, needs_testing=false.\n\n"
+     "2. standard:\n"
      "   - Moderate logic, possible edge cases.\n"
      "   - Small system but not architectural.\n"
      "   - Example: CLI app, CRUD logic, small API.\n"
      "   - Flags: needs_review=true, needs_testing=true, needs_spec=false (usually).\n\n"
-     "3. COMPLEX:\n"
+     "3. complex:\n"
      "   - Multi-module, architecture design, concurrency, security-sensitive.\n"
      "   - External integrations.\n"
      "   - Example: 'REST API with Auth and DB', 'Distributed worker system', 'Gaming applications with logic and UI'.\n"
@@ -61,6 +64,7 @@ _classifier_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+@subscribe(ActionType.COLD_START, node_name="classify_task")
 def classify_task_node(state: AgentState) -> dict:
     """
     Analyzes task requirements and profiles the complexity.

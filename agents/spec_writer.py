@@ -7,6 +7,8 @@ from a raw requirements string.
 """
 
 from langchain_core.prompts import ChatPromptTemplate
+from datetime import datetime
+from pydantic import BaseModel, Field
 from agents.state import AgentState
 from agents.spec_schema import SpecOutput
 from agents.artifacts import save_artifact
@@ -25,10 +27,10 @@ _spec_writer_prompt = ChatPromptTemplate.from_messages([
         "2. File list — always [\"solution.py\"] for a single-file solution\n"
         "3. Class/function design — plain-English outline of the key abstractions\n"
         "4. Key edge cases — things the implementation MUST handle\n"
-        "5. Complexity estimate — \"simple\", \"medium\", or \"complex\""
+        "5. Complexity estimate — \"simple\", \"medium\", or \"complex\"\n\n"
+        "If you need deep research before you can write the spec, call the RequestResearch tool."
     )),
 ])
-
 
 @subscribe(ActionType.TASK_CLASSIFIED)
 def spec_writer_node(state: AgentState) -> AgentState:
@@ -56,18 +58,44 @@ def spec_writer_node(state: AgentState) -> AgentState:
     
     messages = _spec_writer_prompt.format_messages(requirements=state["requirements"])
     
+    spec_structured = None
+    spec_doc_path = None
+    
     try:
-        llm = get_llm(
+        base_llm = get_llm(
             for_heavy_task=False, 
             override_model=state.get("agent_models", {}).get("spec_writer", ""),
             base_model=state.get("model", "ollama")
         )
-        structured_llm = llm.with_structured_output(SpecOutput)
         
-        spec_structured = None
-        spec_doc_path = None
+        structured_llm = get_llm(
+            for_heavy_task=False, 
+            override_model=state.get("agent_models", {}).get("spec_writer", ""),
+            base_model=state.get("model", "ollama"),
+            extra_tools=[SpecOutput],
+            bind_request_research=True
+        )
         try:
-            spec: SpecOutput = structured_llm.invoke(messages)
+            response = structured_llm.invoke(messages)
+            
+            if response.tool_calls:
+                tool_call = response.tool_calls[0]
+                if tool_call["name"] == "RequestResearch":
+                    query = tool_call["args"].get("query", state["requirements"])
+                    emit_event(state["task_id"], {
+                        "type": "log",
+                        "message": f"SpecWriter: Handing off to Researcher for: {query}"
+                    })
+                    return {
+                        "messages": [make_action_message(f"Requested research: {query}", ActionType.NEEDS_RESEARCH, "spec_writer")],
+                    }
+                else:
+                    # It's a SpecOutput
+                    spec = SpecOutput(**tool_call["args"])
+            else:
+                # Fallback if it didn't use a tool, force structured output
+                spec = base_llm.with_structured_output(SpecOutput).invoke(messages)
+                
             spec_structured = spec.model_dump()
             
             # Persist to disk (MetaGPT artifact-first pattern)
@@ -99,22 +127,57 @@ def spec_writer_node(state: AgentState) -> AgentState:
         })
         
         # Return only new messages — add_messages reducer handles appending
-        summary = f"Spec complete: {spec_structured.get('complexity_estimate', 'unknown')} complexity" if spec_structured else "Spec complete (unstructured)"
-        return {
+        # Prepare the isolated state update
+        spec_data = {
             "spec_doc_path": spec_doc_path,
             "spec_structured": spec_structured,
-            "current_agent": "spec_writer",
+        }
+        
+        # Record the event
+        complexity = spec_structured.get("complexity_estimate") if spec_structured else "unknown"
+        edge_cases_count = len(spec_structured.get("key_edge_cases", [])) if spec_structured else 0
+        summary = f"Technical spec completed. Complexity: {complexity}, Edge cases: {edge_cases_count}."
+        
+        # Initialize execution plan and acceptance criteria if not exists
+        exec_plan = state.get("execution_plan") or []
+        if not exec_plan:
+            exec_plan = [
+                {"step_id": 1, "phase": "PLAN", "description": "Write technical specification", "status": "completed"},
+                {"step_id": 2, "phase": "MAKE", "description": "Generate and refine code", "status": "pending"},
+                {"step_id": 3, "phase": "TEST", "description": "Test code behavior", "status": "pending"}
+            ]
+        
+        acc_criteria = state.get("acceptance_criteria") or {}
+        if not acc_criteria and spec_structured:
+            acc_criteria = {"must_handle": spec_structured.get("key_edge_cases", [])}
+
+        completion_event = {
+            "type": "spec_completed",
+            "agent": "spec_writer",
+            "timestamp": datetime.now().isoformat(),
+            "data": {"complexity": complexity}
+        }
+
+        return {
+            "agent_states": {"spec_writer": spec_data},
             "messages": [make_action_message(summary, ActionType.PRD_READY, "spec_writer")],
+            "events": [completion_event],
+            "plan_iterations": state.get("plan_iterations", 0) + 1,
+            "execution_plan": exec_plan,
+            "acceptance_criteria": acc_criteria
         }
     except Exception as e:
+        error_event = {
+            "type": "error",
+            "agent": "spec_writer",
+            "timestamp": datetime.now().isoformat(),
+            "data": {"error": str(e)}
+        }
         emit_event(state["task_id"], {
             "type": "system_error",
             "error": f"Spec writer failed: {str(e)}"
         })
-        # Non-fatal — downstream generate will still work without a spec
         return {
-            "spec_doc_path": None,
-            "spec_structured": None,
-            "error": str(e),
-            "current_agent": "spec_writer"
+            "agent_states": {"spec_writer": {"error": str(e)}},
+            "errors": [error_event]
         }

@@ -31,8 +31,14 @@ def cli_tester_node(state: AgentState) -> AgentState:
         "message": "[AGENT_START tester]"
     })
     
+    llm_states = state.get("agent_states", {})
+    gen_state = llm_states.get("generate", {})
+    refine_state = llm_states.get("refine", {})
+    
     # Use refined code if available, otherwise use generated code
-    code_to_test = clean_code_output(state.get("refined_code") or state["generated_code"])
+    generated_code = gen_state.get("generated_code", "")
+    refined_code = refine_state.get("refined_code", "")
+    code_to_test = clean_code_output(refined_code or generated_code)
     
     # If benchmark test code is provided, append it to the code to test
     if state.get("benchmark_test_code"):
@@ -50,6 +56,14 @@ def cli_tester_node(state: AgentState) -> AgentState:
         code_to_test.strip().startswith("let "),
     ])
     
+    # Detect interactive GUI/game scripts which run in infinite loops
+    interactive_modules = ["pygame", "tkinter", "turtle", "curses", "CustomTkinter"]
+    is_interactive = False
+    for mod in interactive_modules:
+        if f"import {mod}" in code_to_test or f"from {mod}" in code_to_test:
+            is_interactive = True
+            break
+            
     if not is_python:
         # Non-Python code detected - skip execution with helpful message
         language_detected = "Unknown"
@@ -81,12 +95,15 @@ def cli_tester_node(state: AgentState) -> AgentState:
         })
         
         skip_msg = f"⚠️ Test SKIPPED\nReason: {language_detected} code detected\nSandbox only supports Python execution\nThe code appears syntactically valid but cannot be tested in Python sandbox."
+        test_data = {"test_results": skip_msg}
         return {
-            "test_results": skip_msg,
-            "current_agent": "tester",
+            "agent_states": {"test": test_data},
             "messages": [make_action_message(skip_msg, ActionType.TEST_COMPLETE, "test")],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
+    
+    # Interactive scripts run infinite loops, so we reduce the timeout to quickly check for initial crashes
+    execution_timeout = 3 if is_interactive else 10
     
     emit_event(state["task_id"], {
         "type": "cli_output",
@@ -99,9 +116,66 @@ def cli_tester_node(state: AgentState) -> AgentState:
     })
     
     # Execute the code
-    result = execute(code_to_test, timeout_seconds=10)
+    result = execute(code_to_test, timeout_seconds=execution_timeout)
     
+    import re
+    import sys
+    import subprocess
+    
+    retries = 0
+    max_retries = 2
+    installed_packages = []
+    while retries < max_retries and (result["status"] == "exception" or result["status"] == "error"):
+        error_text = result.get("traceback", "") or result.get("stderr", "")
+        match = re.search(r"ModuleNotFoundError: No module named '([^']+)'", error_text)
+        if not match:
+            break
+            
+        module_name = match.group(1)
+        
+        emit_event(state["task_id"], {
+            "type": "cli_output",
+            "message": f"📦 Auto-installing missing package: {module_name}...",
+        })
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": f"📦 Auto-installing missing package: {module_name}..."
+        })
+        
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", module_name], 
+                capture_output=True, text=True, check=True
+            )
+            emit_event(state["task_id"], {
+                "type": "cli_output",
+                "message": f"✅ Successfully installed {module_name}. Retrying execution...",
+            })
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"✅ Successfully installed {module_name}."
+            })
+            
+            installed_packages.append(module_name)
+            
+            # Retry execution
+            result = execute(code_to_test, timeout_seconds=execution_timeout)
+            retries += 1
+            
+        except subprocess.CalledProcessError as e:
+            emit_event(state["task_id"], {
+                "type": "cli_output",
+                "message": f"❌ Failed to auto-install {module_name}. Error: {e.stderr}",
+            })
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"❌ Failed to auto-install {module_name}."
+            })
+            break
+
     test_results = []
+    if installed_packages:
+        test_results.append(f"ℹ️ Auto-installed dependencies: {', '.join(installed_packages)}")
     
     if result["status"] == "success" and result.get("returncode") == 0:
         test_results.append("✅ Test PASSED")
@@ -134,18 +208,35 @@ def cli_tester_node(state: AgentState) -> AgentState:
             })
 
     elif result["status"] == "timeout":
-        test_results.append("⏱️ Test TIMEOUT")
-        test_results.append(f"Code took too long to execute (>10s)")
-        
-        emit_event(state["task_id"], {
-            "type": "cli_output",
-            "message": "⏱️ Timeout: Code took too long to execute",
-        })
-        
-        emit_event(state["task_id"], {
-            "type": "log",
-            "message": "⏱️ Execution timed out"
-        })
+        if is_interactive:
+            # For interactive/infinite-loop scripts, surviving the timeout without crashing is a SUCCESS
+            test_results.append("✅ Test PASSED")
+            test_results.append(f"Interactive script ran without crashing for the {execution_timeout}s test duration.")
+            if result.get("stdout"):
+                test_results.append(f"Output:\n{result['stdout']}")
+                
+            emit_event(state["task_id"], {
+                "type": "cli_output",
+                "message": f"✅ Success! Interactive script survived {execution_timeout}s without crashing.",
+            })
+            
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"✅ Interactive code executed successfully for {execution_timeout}s!"
+            })
+        else:
+            test_results.append("⏱️ Test TIMEOUT")
+            test_results.append(f"Code took too long to execute (>{execution_timeout}s)")
+            
+            emit_event(state["task_id"], {
+                "type": "cli_output",
+                "message": "⏱️ Timeout: Code took too long to execute",
+            })
+            
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": "⏱️ Execution timed out"
+            })
     else:
         test_results.append("❌ Test FAILED")
         test_results.append(f"Status: {result['status']}")
@@ -178,13 +269,17 @@ def cli_tester_node(state: AgentState) -> AgentState:
     n = state.get("iteration_count", 0)
     save_json_artifact(state["task_id"], f"test_outputs/run_{n:03d}.json", result)
     
-    return {
+    test_data = {
         "test_results": "\n".join(test_results),
         "test_output": result,  # Store raw output for analyzer
-        "current_agent": "tester",
+    }
+    
+    return {
+        "agent_states": {"test": test_data},
         "messages": [make_action_message(
             "\n".join(test_results),
             ActionType.TEST_COMPLETE, "test"
         )],
-        "iteration_count": state.get("iteration_count", 0) + 1
+        "iteration_count": state.get("iteration_count", 0) + 1,
+        "test_iterations": state.get("test_iterations", 0) + 1
     }

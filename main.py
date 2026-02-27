@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.pregel._retry import RetryPolicy
+from langgraph.prebuilt import ToolNode
+from tools.langchain_tools import search_duckduckgo, search_serper, scrape_web_page
 from agents.state import AgentState
+from agents.action_types import ActionType
 from agents.nodes import (
     # Pub-Sub infrastructure
     orchestrator_node,
@@ -22,6 +25,7 @@ from agents.nodes import (
     cli_tester_node,
     terminal_analyzer_node,
     classify_task_node,
+    researcher_node,
     set_model_config,
 )
 from typing import Dict, Optional
@@ -56,15 +60,69 @@ def clean_output(text: str) -> str:
 # Compiled graph cache — avoids re-building on every task
 _compiled_graph = None
 
+def build_plan_graph():
+    builder = StateGraph(AgentState)
+    builder.add_node("spec_writer", spec_writer_node, retry=_llm_retry)
+    builder.add_node("researcher", researcher_node, retry=_llm_retry)
+    builder.set_entry_point("spec_writer")
+    
+    def plan_router(state: AgentState):
+        messages = state.get("messages", [])
+        if not messages: return END
+        last_action = getattr(messages[-1], "additional_kwargs", {}).get("action_type", "")
+        if last_action == str(ActionType.NEEDS_RESEARCH):
+            return "researcher"
+        if getattr(messages[-1], "additional_kwargs", {}).get("sender") == "researcher":
+            return "spec_writer"
+        return END
+
+    builder.add_conditional_edges(
+        "spec_writer", 
+        plan_router, 
+        {"researcher": "researcher", "spec_writer": "spec_writer", END: END}
+    )
+    builder.add_edge("researcher", "spec_writer")
+    return builder.compile()
+
+def build_make_graph():
+    builder = StateGraph(AgentState)
+    builder.add_node("generate", code_generator_node, retry=_llm_retry)
+    builder.add_node("review", code_reviewer_node, retry=_llm_retry)
+    builder.add_node("decide", decision_maker_node, retry=_llm_retry)
+    builder.add_node("refine", code_refiner_node, retry=_llm_retry)
+    
+    builder.set_entry_point("generate")
+    
+    builder.add_edge("generate", "review")
+    builder.add_edge("review", "decide")
+    builder.add_edge("refine", "review")
+    
+    def decide_router(state: AgentState):
+        decision = state.get("agent_states", {}).get("decide", {}).get("decision", "YES")
+        if decision == "NO":
+            return END
+        return "refine"
+        
+    builder.add_conditional_edges("decide", decide_router, {"refine": "refine", END: END})
+    return builder.compile()
+
+def build_test_graph():
+    builder = StateGraph(AgentState)
+    builder.add_node("test", cli_tester_node)
+    builder.add_node("analyze_test", terminal_analyzer_node, retry=_llm_retry)
+    builder.set_entry_point("test")
+    builder.add_edge("test", "analyze_test")
+    builder.add_edge("analyze_test", END)
+    return builder.compile()
 
 def create_agent_graph():
     """
     Create (or return cached) the compiled LangGraph state graph.
     
-    Autonomous Orchestrator Architecture:
-        START → orchestrator (LLM-driven think→act loop)
-        Every agent node → orchestrator
-        orchestrator → (Send with filtered state) → pending agents OR END
+    Nested Graph Architecture:
+        START → manager
+        manager → PLAN_GRAPH, MAKE_GRAPH, TEST_GRAPH, or END
+        Phase Graphs → manager
     """
     global _compiled_graph
     if _compiled_graph is not None:
@@ -73,40 +131,70 @@ def create_agent_graph():
     # Initialize graph with state schema
     workflow = StateGraph(AgentState)
     
-    # ── The Hub: Autonomous Orchestrator ────────────────────────────────
-    workflow.add_node("orchestrator", orchestrator_node)
+    # ── The Hub: Phase Router Manager ────────────────────────────────────
+    workflow.add_node("manager", manager_node)
     
-    # ── The Spokes: Agent nodes ─────────────────────────────────────────
-    # LLM-calling nodes get a retry policy for transient failures
-    workflow.add_node("spec_writer", spec_writer_node, retry=_llm_retry)
-    workflow.add_node("generate", code_generator_node, retry=_llm_retry)
-    workflow.add_node("review", code_reviewer_node, retry=_llm_retry)
-    workflow.add_node("decide", decision_maker_node, retry=_llm_retry)
-    workflow.add_node("refine", code_refiner_node, retry=_llm_retry)
-    workflow.add_node("document", doc_writer_node, retry=_llm_retry)
-    workflow.add_node("test", cli_tester_node)  # no retry — deterministic executor
-    workflow.add_node("analyze_test", terminal_analyzer_node, retry=_llm_retry)
-    workflow.add_node("classify_task", classify_task_node, retry=_llm_retry)
+    # ── Phase Guards ─────────────────────────────────────────────────────
+    def plan_guard(state: AgentState):
+        if state.get("phase") != "PLAN": return {"messages": []} # returning empty effectively acts as a pass-through
+        return {"current_agent": "plan_guard"}
+        
+    def make_guard(state: AgentState):
+        if state.get("phase") != "MAKE": return {"messages": []}
+        return {"current_agent": "make_guard"}
+        
+    def test_guard(state: AgentState):
+        if state.get("phase") != "TEST": return {"messages": []}
+        return {"current_agent": "test_guard"}
+        
+    def plan_guard_edge(state: AgentState):
+        if state.get("phase") != "PLAN": return END
+        return "PLAN_GRAPH"
+        
+    def make_guard_edge(state: AgentState):
+        if state.get("phase") != "MAKE": return END
+        return "MAKE_GRAPH"
+        
+    def test_guard_edge(state: AgentState):
+        if state.get("phase") != "TEST": return END
+        return "TEST_GRAPH"
+
+    workflow.add_node("plan_guard", plan_guard)
+    workflow.add_node("make_guard", make_guard)
+    workflow.add_node("test_guard", test_guard)
+
+    # ── The Phase Subgraphs ──────────────────────────────────────────────
+    workflow.add_node("PLAN_GRAPH", build_plan_graph())
+    workflow.add_node("MAKE_GRAPH", build_make_graph())
+    workflow.add_node("TEST_GRAPH", build_test_graph())
     
-    # ── Edge wiring: Hub-and-Spoke ──────────────────────────────────────
-    # Entry point: START → orchestrator
-    workflow.set_entry_point("orchestrator")
+    tools = [search_duckduckgo, search_serper, scrape_web_page]
+    tool_node = ToolNode(tools)
+    workflow.add_node("tools", tool_node, retry=_llm_retry)
     
-    # Every spoke points back to the hub
-    for node_name in ["spec_writer", "generate", "review", "decide",
-                      "refine", "document", "test", "analyze_test",
-                      "classify_task"]:
-        workflow.add_edge(node_name, "orchestrator")
+    # ── Edge wiring ──────────────────────────────────────────────────────
+    workflow.set_entry_point("manager")
     
-    # Orchestrator decides its own conditional routing
-    workflow.add_conditional_edges("orchestrator", orchestrator_router)
-    
-    # Log the subscription table for debugging
-    subs = registry.all_subscriptions()
-    try:
-        print(f"Subscription Table: {subs}", flush=True)
-    except UnicodeEncodeError:
-        pass
+    # Hub-and-Spoke to Subgraphs
+    for node_name in ["PLAN_GRAPH", "MAKE_GRAPH", "TEST_GRAPH", "tools"]:
+        workflow.add_edge(node_name, "manager")
+        
+    workflow.add_conditional_edges("plan_guard", plan_guard_edge, {"PLAN_GRAPH": "PLAN_GRAPH", END: END})
+    workflow.add_conditional_edges("make_guard", make_guard_edge, {"MAKE_GRAPH": "MAKE_GRAPH", END: END})
+    workflow.add_conditional_edges("test_guard", test_guard_edge, {"TEST_GRAPH": "TEST_GRAPH", END: END})
+        
+    workflow.add_conditional_edges(
+        "manager", 
+        manager_router,
+        {
+            "PLAN_GRAPH": "plan_guard",
+            "MAKE_GRAPH": "make_guard",
+            "TEST_GRAPH": "test_guard",
+            "tools": "tools",
+            "manager": "manager",
+            END: END
+        }
+    )
     
     compiled = workflow.compile(checkpointer=_checkpointer)
     _compiled_graph = compiled
@@ -140,33 +228,22 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
         "model": model,
         "agent_models": agent_models or {},
         "benchmark_test_code": benchmark_test_code,
-        "generated_code": "",
-        "review_report": "",
-        "decision": "",
-        "refined_code": "",
-        "documentation": "",
-        "test_results": "",
-        "messages": [],
-        "current_agent": "",
-        "error": None,
-        "iteration_count": 0,
-        "debug_loop_count": 0,
-        "total_tokens_used": None,
+        
+        # Coordination & Event Sourced state
+        "events": [],
+        "errors": [],
+        "agent_states": {},
         "task_profile": None,
         "agent_metrics": {},
-        "plan": [],
-        "pending_dispatches": [],
-        "orchestrator_history": [],
-        "orchestrator_thinking": "",
-        # Spec writer output
-        "spec_doc_path": None,
-        "spec_structured": None,
-        # Structured Pydantic outputs
-        "review_report_structured": None,
-        "decision_output": None,
-        "analysis_structured": None,
-        # Per-agent memory
-        "refiner_memory": None,
+        
+        # Telemetry
+        "total_tokens_used": 0,
+        "iteration_count": 0,
+        "debug_loop_count": 0,
+        
+        # Core
+        "messages": [],
+        "current_agent": "manager",
     }
     
     # Execute the graph — thread_id enables checkpointer resume/replay
@@ -190,8 +267,17 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
     # EMIT FINAL RESULTS
     # =========================
     
-    # Final code (use refined if available, otherwise generated)
-    final_code = clean_output(final_state.get("refined_code") or final_state["generated_code"])
+    # Final results extraction from isolated states
+    llm_states = final_state.get("agent_states", {})
+    gen_state = llm_states.get("generate", {})
+    refine_state = llm_states.get("refine", {})
+    review_state = llm_states.get("review", {})
+    decide_state = llm_states.get("decide", {})
+    doc_state = llm_states.get("document", {})
+    test_state = llm_states.get("test", {})
+    spec_state = llm_states.get("spec_writer", {})
+
+    final_code = clean_output(refine_state.get("refined_code") or gen_state.get("generated_code") or "")
     
     emit_event(task_id, {
         "type": "code_output",
@@ -202,57 +288,62 @@ def run_software_crew(requirements: str, task_id: str, model: str = "ollama", ag
     emit_event(task_id, {
         "type": "review_output",
         "agent": "reviewer",
-        "review": final_state["review_report"]
+        "review": review_state.get("review_report", "")
     })
     
     emit_event(task_id, {
         "type": "decision_output",
         "agent": "decision",
-        "decision": final_state["decision"]
+        "decision": decide_state.get("decision", "")
     })
     
-    emit_event(task_id, {
-        "type": "doc_output",
-        "agent": "doc_writer",
-        "documentation": final_state["documentation"]
-    })
+    if doc_state.get("documentation"):
+        emit_event(task_id, {
+            "type": "doc_output",
+            "agent": "doc_writer",
+            "documentation": doc_state["documentation"]
+        })
     
-    # Emit test results if available
-    if final_state.get("test_results"):
+    if test_state.get("test_results"):
         emit_event(task_id, {
             "type": "test_output",
             "agent": "tester",
-            "results": final_state["test_results"]
+            "results": test_state["test_results"]
         })
     
+    if final_state.get("errors"):
+        emit_event(task_id, {"type": "system_error", "error": f"Workflow had {len(final_state['errors'])} errors."})
+
     emit_event(task_id, {"type": "task_completed"})
     
     # Return results in expected format
     results = {
-        "generated_code": clean_output(final_state["generated_code"]),
-        "review_report": final_state["review_report"],
-        "decision": final_state["decision"],
+        "generated_code": clean_output(gen_state.get("generated_code", "")),
+        "review_report": review_state.get("review_report", ""),
+        "decision": decide_state.get("decision", ""),
         "refined_code": final_code,
-        "documentation": final_state["documentation"],
-        "test_results": final_state.get("test_results", ""),
+        "documentation": doc_state.get("documentation", ""),
+        "test_results": test_state.get("test_results", ""),
         "model_used": model,
-        # Telemetry fields consumed by the benchmark harness
         "iteration_count": final_state.get("iteration_count", 0),
         "debug_loop_count": final_state.get("debug_loop_count", 0),
         "total_tokens_used": final_state.get("total_tokens_used"),
-        # Structured Pydantic outputs
-        "spec_structured": final_state.get("spec_structured"),
-        "spec_doc_path": final_state.get("spec_doc_path"),
-        "review_report_structured": final_state.get("review_report_structured"),
-        "decision_output": final_state.get("decision_output"),
-        "analysis_structured": final_state.get("analysis_structured"),
+        "spec_structured": spec_state.get("spec_structured"),
+        "spec_doc_path": spec_state.get("spec_doc_path"),
+        "review_report_structured": review_state.get("review_report_structured"),
+        "decision_output": decide_state.get("decision_output"),
+        "analysis_structured": test_state.get("analysis_structured"),
+        "events": final_state.get("events", []),
+        "errors": final_state.get("errors", [])
     }
 
     return results
 
 
 if __name__ == "__main__":
+    import uuid
     model = input("Model (ollama/groq) [ollama]: ").strip() or "ollama"
     req = input("Enter requirements: ")
-    result = run_software_crew(req, task_id="debug", model=model)
+    task_id = f"run_{uuid.uuid4().hex[:6]}"
+    result = run_software_crew(req, task_id=task_id, model=model)
     print(result)

@@ -27,6 +27,54 @@ _groq_llm = None
 _current_model = "ollama"
 _groq_api_key = ""
 
+# Tools available to the LLMs
+from tools.langchain_tools import search_duckduckgo, search_serper, scrape_web_page
+_available_tools = [search_duckduckgo, search_serper, scrape_web_page]
+
+# Models known to NOT support tool calling
+_MODELS_WITHOUT_TOOL_SUPPORT = {
+    "gemma3:4b", "gemma3:1b", "gemma3",  # Gemma 3 small variants
+    "llama2:7b",  # Some llama2 variants struggle
+}
+
+# Cache for model capability check
+_model_tool_support_cache: dict[str, bool] = {}
+
+
+def check_model_tool_support(model_name: str) -> bool:
+    """
+    Check if a model supports tool calling.
+    Returns True if tools are supported, False otherwise.
+    """
+    global _model_tool_support_cache
+    
+    # Check cache first
+    if model_name in _model_tool_support_cache:
+        return _model_tool_support_cache[model_name]
+    
+    # Check against known unsupported models
+    model_lower = model_name.lower()
+    for unsupported in _MODELS_WITHOUT_TOOL_SUPPORT:
+        if unsupported.lower() in model_lower:
+            _model_tool_support_cache[model_name] = False
+            return False
+    
+    # Try a quick test with the model
+    try:
+        from langchain_core.messages import HumanMessage
+        test_llm = ChatOllama(model=model_name, base_url="http://localhost:11434", temperature=0.1)
+        # Try to bind a simple tool - if it fails, model doesn't support tools
+        test_llm.bind_tools([search_duckduckgo])
+        _model_tool_support_cache[model_name] = True
+        return True
+    except Exception as e:
+        # If binding fails, model doesn't support tools
+        if "does not support tools" in str(e).lower():
+            _model_tool_support_cache[model_name] = False
+            return False
+        # For other errors, assume tools work (fail gracefully)
+        return True
+
 
 def get_ollama_llm(model_name: str = None):
     """Get or create Ollama LLM instance."""
@@ -138,7 +186,7 @@ def set_model_config(model: str, groq_api_key: str = ""):
         get_groq_llm()  # Initialize immediately
 
 
-def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: str = ""):
+def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: str = "", bind_search_tools: bool = False, bind_request_research: bool = False, extra_tools: list = None):
     """
     Get the appropriate LLM based on configuration and task type.
     
@@ -146,6 +194,11 @@ def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: 
         for_heavy_task: If True, use the heavy-duty model (Groq for code gen).
         override_model: Specific model ID for this node (per-agent config).
         base_model: Global model choice for this run (from frontend).
+        bind_search_tools: If True, bind search/scrape tools to the LLM.
+                           Only agents that need web access should set this.
+        bind_request_research: If True, binds the RequestResearch tool so the agent
+                               can delegate deep research gathering to the researcher agent.
+        extra_tools: List of extra tools to bind.
     """
     # 1. Priority: Explicit override for this specific step/agent
     if override_model:
@@ -155,23 +208,52 @@ def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: 
                   ("llama" in override_model.lower() and "ollama" not in override_model.lower())
                   
         if is_groq and _groq_api_key:
-            return get_groq_llm(model_name=override_model)
+            llm = get_groq_llm(model_name=override_model)
+        else:
+            # Default to local Ollama model
+            llm = get_ollama_llm(model_name=override_model)
+    else:
+        # 2. Use the base model choice from the run if provided
+        current_choice = base_model or _current_model
         
-        # Default to local Ollama model
-        return get_ollama_llm(model_name=override_model)
+        # 3. Decision logic: Route to Groq if requested or if it's a cloud llama model
+        # Again, ensure 'ollama' doesn't trigger the 'llama' check
+        is_groq_choice = current_choice == "groq" or \
+                         ("llama" in current_choice.lower() and "ollama" not in current_choice.lower())
 
-    # 2. Use the base model choice from the run if provided
-    current_choice = base_model or _current_model
+        if is_groq_choice and _groq_api_key:
+            llm = get_groq_llm(model_name=current_choice)
+        else:
+            llm = get_ollama_llm(model_name=current_choice)
     
-    # 3. Decision logic: Route to Groq if requested or if it's a cloud llama model
-    # Again, ensure 'ollama' doesn't trigger the 'llama' check
-    is_groq_choice = current_choice == "groq" or \
-                     ("llama" in current_choice.lower() and "ollama" not in current_choice.lower())
-
-    if is_groq_choice and _groq_api_key:
-        return get_groq_llm(model_name=current_choice)
+    # Get the actual model name for tool support check
+    actual_model = override_model or base_model or _current_model
+    if actual_model == "groq":
+        actual_model = "llama-3.3-70b-versatile"  # Default Groq model
+    
+    # Check if model supports tools
+    supports_tools = check_model_tool_support(actual_model)
+    if not supports_tools:
+        print(f"Warning: Model '{actual_model}' may not support tools. Using plain LLM.")
+        # Return LLM without tools bound
+    
+    tools_to_bind = []
+    if supports_tools and bind_search_tools:
+        tools_to_bind.extend(_available_tools)
+    if supports_tools and bind_request_research:
+        from agents.action_types import RequestResearch
+        tools_to_bind.append(RequestResearch)
+    if supports_tools and extra_tools:
+        tools_to_bind.extend(extra_tools)
         
-    return get_ollama_llm(model_name=current_choice)
+    if tools_to_bind:
+        try:
+            return llm.bind_tools(tools_to_bind)
+        except Exception as e:
+            print(f"Warning: Failed to bind tools for {actual_model}: {e}. Using plain LLM.")
+            return llm
+        
+    return llm
 
 
 def clean_code_output(text: str) -> str:
@@ -215,16 +297,21 @@ def clean_code_output(text: str) -> str:
 # NATIVE MESSAGE TRIMMING (replaces _buffered_messages)
 # ===========================================
 
+# NOTE: token_counter=len counts NUMBER OF MESSAGES (not tokens).
+# So max_tokens=15 means "keep the last 15 messages".
+# This is intentional — we want message-count pruning, not token-count pruning,
+# because accurate token counting requires a tokenizer we don't have for all models.
 _trim = trim_messages(
     strategy="last",
-    max_tokens=20,
-    token_counter=len,
+    max_tokens=15,         # Keep last 15 messages
+    token_counter=len,     # len(messages) = message count
     start_on="human",
     include_system=True,
 )
 
 
 def _trimmed_invoke(llm, messages: list):
-    """Trim messages to fit context window, then invoke the LLM."""
+    """Trim messages to fit context window (keeps last 15 messages), then invoke LLM."""
     trimmed = _trim.invoke(messages)
     return llm.invoke(trimmed)
+
