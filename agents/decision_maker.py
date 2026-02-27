@@ -5,6 +5,7 @@ Decides if code needs refinement. Uses a deterministic path when structured
 review data is available; falls back to LLM only when needed.
 """
 
+from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.schemas import ReviewOutput, DecisionOutput
@@ -60,6 +61,10 @@ def decision_maker_node(state: AgentState) -> AgentState:
         
         decision_output_dict = None
         
+        llm_states = state.get("agent_states", {})
+        review_state = llm_states.get("review", {})
+        gen_state = llm_states.get("generate", {})
+        
         if decision_signal == "APPROVED":
             decision = "NO"
             rationale = "Human override: APPROVED"
@@ -78,9 +83,9 @@ def decision_maker_node(state: AgentState) -> AgentState:
             })
             update_decision_signal(state["task_id"], None)
             
-        elif state.get("review_report_structured"):
+        elif review_state.get("review_report_structured"):
             # 2. Deterministic decision from structured review — NO LLM call
-            review = ReviewOutput(**state["review_report_structured"])
+            review = ReviewOutput(**review_state["review_report_structured"])
             decision = "YES" if review.verdict == "NEEDS_REFINE" else "NO"
             rationale = (f"Deterministic: verdict={review.verdict}, "
                          f"score={review.overall_score}/10, "
@@ -92,7 +97,7 @@ def decision_maker_node(state: AgentState) -> AgentState:
         else:
             # 3. Fallback: LLM decision with structured output
             messages = _decision_maker_prompt.format_messages(
-                generated_code=state["generated_code"]
+                generated_code=gen_state.get("generated_code", "")
             )
             llm = get_llm(
                 for_heavy_task=False, 
@@ -145,10 +150,13 @@ def decision_maker_node(state: AgentState) -> AgentState:
             "message": f"[AGENT_END decision]"
         })
 
-        return {
+        decide_data = {
             "decision": decision,
-            "decision_output": decision_output_dict,
-            "current_agent": "decision",
+            "decision_output": decision_output_dict
+        }
+
+        return {
+            "agent_states": {"decide": decide_data},
             "messages": [make_action_message(
                 f"{decision}: {rationale}", action, "decide"
             )],
@@ -160,7 +168,15 @@ def decision_maker_node(state: AgentState) -> AgentState:
             "error": f"Decision making failed: {str(e)}"
         })
         return {
-            "decision": "YES",  # Default to refinement on error
-            "error": str(e),
-            "current_agent": "decision"
+            "agent_states": {"decide": {"decision": "YES", "error": str(e)}},
+            "errors": [{
+                "type": "error",
+                "agent": "decision",
+                "timestamp": datetime.now().isoformat(),
+                "data": {"error": str(e)}
+            }],
+            "messages": [make_action_message(
+                f"Decision making failed: {str(e)}",
+                ActionType.DECISION_REFINE, "decide"
+            )]
         }

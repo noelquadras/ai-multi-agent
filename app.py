@@ -138,7 +138,7 @@ def _resume_graph(task_id: str):
     cancellation_registry.register(task_id)
 
     try:
-        graph = create_agent_graph(include_cli_test=True)
+        graph = create_agent_graph()
         config = {"configurable": {"thread_id": task_id}}
         # Command(resume=True) tells LangGraph to resume from the interrupt
         graph.invoke(Command(resume=True), config=config)

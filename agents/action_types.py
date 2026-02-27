@@ -17,10 +17,17 @@ Usage:
 
 from enum import StrEnum
 from langchain_core.messages import AIMessage
+from pydantic import BaseModel, Field
+
+class RequestResearch(BaseModel):
+    """Call this to delegate deep research gathering to the researcher agent."""
+    query: str = Field(description="The specific research query or topic to investigate.")
+    rationale: str = Field(description="Why this research is needed.")
 
 
 class ActionType(StrEnum):
     """All publishable action types in the system."""
+    COLD_START          = "cold_start"
     TASK_START          = "task_start"
     TASK_CLASSIFIED     = "task_classified"
     PRD_READY           = "prd_ready"
@@ -34,6 +41,8 @@ class ActionType(StrEnum):
     ANALYSIS_FIX        = "analysis_fix"
     ANALYSIS_REGENERATE = "analysis_regenerate"
     DOCS_READY          = "docs_ready"
+    RESEARCH_READY      = "research_ready"
+    NEEDS_RESEARCH      = "needs_research"
 
 
 class SubscriptionRegistry:

@@ -5,6 +5,7 @@ Analyzes raw terminal output to determine if code needs refinement
 and what specific fixes are required. Uses structured Pydantic output.
 """
 
+from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.schemas import AnalysisOutput
@@ -57,7 +58,10 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
         "message": "[AGENT_START analyzer]"
     })
     
-    test_output = state.get("test_output", {})
+    llm_states = state.get("agent_states", {})
+    test_state = llm_states.get("test", {})
+    
+    test_output = test_state.get("test_output", {})
     returncode = test_output.get("returncode")
     stdout = test_output.get("stdout", "")
     stderr = test_output.get("stderr", "")
@@ -72,11 +76,13 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
             "type": "log",
             "message": "✅ Analyzer: Code executed successfully. No fix needed."
         })
-        return {
+        analyze_data = {
             "analysis": "PASS",
             "analysis_structured": pass_output.model_dump(),
-            "decision": "NO",
-            "current_agent": "analyzer",
+            "decision": "NO"
+        }
+        return {
+            "agent_states": {"analyze_test": analyze_data},
             "messages": [make_action_message(
                 "PASS: Code executed successfully",
                 ActionType.ANALYSIS_PASS, "analyze_test"
@@ -99,10 +105,32 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
         analysis_output_dict = None
         try:
             result: AnalysisOutput = structured_llm.invoke(messages)
+            
+            # 1. Tool execution requested
+            if hasattr(result, "tool_calls") and result.tool_calls:
+                emit_event(state["task_id"], {
+                    "type": "log",
+                    "message": f"🧠 Analyzer requested tools: {[t['name'] for t in result.tool_calls]}"
+                })
+                return {
+                    "messages": [result]
+                }
+                
             analysis = f"{result.verdict}: {result.root_cause}" if result.verdict == "FIX_REQUIRED" else result.verdict
             analysis_output_dict = result.model_dump()
         except Exception:
             response = _trimmed_invoke(llm, messages)
+            
+            # 1. Tool execution requested
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                emit_event(state["task_id"], {
+                    "type": "log",
+                    "message": f"🧠 Analyzer requested tools: {[t['name'] for t in response.tool_calls]}"
+                })
+                return {
+                    "messages": [response]
+                }
+                
             analysis = response.content.strip()
             # Parse verdict from raw text
             if "REGENERATE" in analysis:
@@ -131,10 +159,13 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
         emit_event(state["task_id"], {"type": "agent_end", "agent": "analyzer"})
         emit_event(state["task_id"], {"type": "log", "message": "[AGENT_END analyzer]"})
         
-        return {
+        analyze_data = {
             "analysis": analysis,
-            "analysis_structured": analysis_output_dict,
-            "current_agent": "analyzer",
+            "analysis_structured": analysis_output_dict
+        }
+        
+        return {
+            "agent_states": {"analyze_test": analyze_data},
             "messages": [make_action_message(
                 f"{verdict}: {analysis}", action, "analyze_test"
             )],
@@ -146,9 +177,21 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
             verdict="FIX_REQUIRED", error_type="runtime",
             root_cause="Analyzer failed, please check logs manually.", fix_hints=[]
         )
-        return {
+        analyze_data = {
             "analysis": "FIX_REQUIRED: Analyzer failed, please check logs manually.",
             "analysis_structured": fallback_output.model_dump(),
-            "error": str(e),
-            "current_agent": "analyzer"
+            "error": str(e)
+        }
+        return {
+            "agent_states": {"analyze_test": analyze_data},
+            "errors": [{
+                "type": "error",
+                "agent": "analyzer",
+                "timestamp": datetime.now().isoformat(),
+                "data": {"error": str(e)}
+            }],
+            "messages": [make_action_message(
+                f"Analysis failed: {str(e)}",
+                ActionType.ANALYSIS_FIX, "analyze_test"
+            )]
         }

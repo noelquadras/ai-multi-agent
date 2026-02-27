@@ -5,6 +5,7 @@ Reviews generated code for security, bugs, and best practices
 using structured Pydantic output.
 """
 
+from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.schemas import ReviewOutput
@@ -59,7 +60,11 @@ def code_reviewer_node(state: AgentState) -> AgentState:
         "message": f"[AGENT_START reviewer]"
     })
     
-    messages = _code_reviewer_prompt.format_messages(generated_code=state["generated_code"])
+    llm_states = state.get("agent_states", {})
+    gen_state = llm_states.get("generate", {})
+    generated_code = gen_state.get("generated_code", "")
+    
+    messages = _code_reviewer_prompt.format_messages(generated_code=generated_code)
     
     try:
         llm = get_llm(
@@ -105,10 +110,14 @@ def code_reviewer_node(state: AgentState) -> AgentState:
             save_artifact(state["task_id"], f"reviews/review_{n:03d}.txt", review)
         
         review_summary = f"Review: score={review_output_dict['overall_score']}/10, verdict={review_output_dict['verdict']}" if review_output_dict else f"Review: {len(review)} chars (raw)"
-        return {
+        
+        review_data = {
             "review_report": review,
-            "review_report_structured": review_output_dict,
-            "current_agent": "reviewer",
+            "review_report_structured": review_output_dict
+        }
+        
+        return {
+            "agent_states": {"review": review_data},
             "messages": [make_action_message(review_summary, ActionType.REVIEW_READY, "review")],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
@@ -118,6 +127,14 @@ def code_reviewer_node(state: AgentState) -> AgentState:
             "error": f"Code review failed: {str(e)}"
         })
         return {
-            "error": str(e),
-            "current_agent": "reviewer"
+            "errors": [{
+                "type": "error",
+                "agent": "reviewer",
+                "timestamp": datetime.now().isoformat(),
+                "data": {"error": str(e)}
+            }],
+            "messages": [make_action_message(
+                f"Code review failed: {str(e)}",
+                ActionType.REVIEW_READY, "review"
+            )]
         }

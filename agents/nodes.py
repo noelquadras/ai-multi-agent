@@ -40,3 +40,4 @@ from agents.doc_writer import doc_writer_node              # noqa: F401
 from agents.cli_tester import cli_tester_node              # noqa: F401
 from agents.terminal_analyzer import terminal_analyzer_node  # noqa: F401
 from agents.classifier import classify_task_node           # noqa: F401
+from agents.researcher import researcher_node              # noqa: F401

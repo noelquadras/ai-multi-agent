@@ -27,6 +27,10 @@ _groq_llm = None
 _current_model = "ollama"
 _groq_api_key = ""
 
+# Tools available to the LLMs
+from tools.langchain_tools import search_duckduckgo, search_serper, scrape_web_page
+_available_tools = [search_duckduckgo, search_serper, scrape_web_page]
+
 
 def get_ollama_llm(model_name: str = None):
     """Get or create Ollama LLM instance."""
@@ -138,7 +142,7 @@ def set_model_config(model: str, groq_api_key: str = ""):
         get_groq_llm()  # Initialize immediately
 
 
-def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: str = ""):
+def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: str = "", bind_search_tools: bool = False, bind_request_research: bool = False, extra_tools: list = None):
     """
     Get the appropriate LLM based on configuration and task type.
     
@@ -146,6 +150,11 @@ def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: 
         for_heavy_task: If True, use the heavy-duty model (Groq for code gen).
         override_model: Specific model ID for this node (per-agent config).
         base_model: Global model choice for this run (from frontend).
+        bind_search_tools: If True, bind search/scrape tools to the LLM.
+                           Only agents that need web access should set this.
+        bind_request_research: If True, binds the RequestResearch tool so the agent
+                               can delegate deep research gathering to the researcher agent.
+        extra_tools: List of extra tools to bind.
     """
     # 1. Priority: Explicit override for this specific step/agent
     if override_model:
@@ -155,23 +164,37 @@ def get_llm(for_heavy_task: bool = False, override_model: str = "", base_model: 
                   ("llama" in override_model.lower() and "ollama" not in override_model.lower())
                   
         if is_groq and _groq_api_key:
-            return get_groq_llm(model_name=override_model)
+            llm = get_groq_llm(model_name=override_model)
+        else:
+            # Default to local Ollama model
+            llm = get_ollama_llm(model_name=override_model)
+    else:
+        # 2. Use the base model choice from the run if provided
+        current_choice = base_model or _current_model
         
-        # Default to local Ollama model
-        return get_ollama_llm(model_name=override_model)
+        # 3. Decision logic: Route to Groq if requested or if it's a cloud llama model
+        # Again, ensure 'ollama' doesn't trigger the 'llama' check
+        is_groq_choice = current_choice == "groq" or \
+                         ("llama" in current_choice.lower() and "ollama" not in current_choice.lower())
 
-    # 2. Use the base model choice from the run if provided
-    current_choice = base_model or _current_model
+        if is_groq_choice and _groq_api_key:
+            llm = get_groq_llm(model_name=current_choice)
+        else:
+            llm = get_ollama_llm(model_name=current_choice)
     
-    # 3. Decision logic: Route to Groq if requested or if it's a cloud llama model
-    # Again, ensure 'ollama' doesn't trigger the 'llama' check
-    is_groq_choice = current_choice == "groq" or \
-                     ("llama" in current_choice.lower() and "ollama" not in current_choice.lower())
-
-    if is_groq_choice and _groq_api_key:
-        return get_groq_llm(model_name=current_choice)
+    tools_to_bind = []
+    if bind_search_tools:
+        tools_to_bind.extend(_available_tools)
+    if bind_request_research:
+        from agents.action_types import RequestResearch
+        tools_to_bind.append(RequestResearch)
+    if extra_tools:
+        tools_to_bind.extend(extra_tools)
         
-    return get_ollama_llm(model_name=current_choice)
+    if tools_to_bind:
+        return llm.bind_tools(tools_to_bind)
+        
+    return llm
 
 
 def clean_code_output(text: str) -> str:
@@ -215,16 +238,21 @@ def clean_code_output(text: str) -> str:
 # NATIVE MESSAGE TRIMMING (replaces _buffered_messages)
 # ===========================================
 
+# NOTE: token_counter=len counts NUMBER OF MESSAGES (not tokens).
+# So max_tokens=15 means "keep the last 15 messages".
+# This is intentional — we want message-count pruning, not token-count pruning,
+# because accurate token counting requires a tokenizer we don't have for all models.
 _trim = trim_messages(
     strategy="last",
-    max_tokens=20,
-    token_counter=len,
+    max_tokens=15,         # Keep last 15 messages
+    token_counter=len,     # len(messages) = message count
     start_on="human",
     include_system=True,
 )
 
 
 def _trimmed_invoke(llm, messages: list):
-    """Trim messages to fit context window, then invoke the LLM."""
+    """Trim messages to fit context window (keeps last 15 messages), then invoke LLM."""
     trimmed = _trim.invoke(messages)
     return llm.invoke(trimmed)
+
