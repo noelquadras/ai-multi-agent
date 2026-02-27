@@ -143,6 +143,10 @@ class AgentState(TypedDict):
 
     # ── Core LangGraph State ──────────────────────────────────────────
     messages: Annotated[Sequence[BaseMessage], add_messages]
+    
+    # ── ReAct Supervisor State ────────────────────────────────────────
+    react_plan: list[dict]
+    terminate: bool
 
     # ── Derived Helper (Used for shorthand if needed, but Event remains source of truth) ──
     # If using these, ensures they are updated ONLY by the Manager/Supervisor.
