@@ -28,7 +28,7 @@ from agents.action_types import (        # noqa: F401
     subscribe,
     make_action_message,
 )
-from agents.manager import manager_node, manager_router  # noqa: F401
+from agents.orchestrator import orchestrator_node, orchestrator_router  # noqa: F401
 
 # ── Node functions (import triggers @subscribe registration) ────────────────
 from agents.spec_writer import spec_writer_node            # noqa: F401

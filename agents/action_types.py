@@ -1,15 +1,14 @@
 """
-Action types and self-registration registry for the Pub-Sub architecture.
+Action types for the orchestrator architecture.
 
-MetaGPT-style pattern: each node declares what it watches via @subscribe().
-The Manager queries the registry at runtime to route messages.
-Adding a new agent = create the file + decorate with @subscribe. No central
-config editing required.
+The ActionType enum is used to tag messages produced by agents.
+The old SubscriptionRegistry and @subscribe decorator are DEPRECATED
+and no longer used for routing, as the LLM-driven orchestrator now
+decides routing dynamically.
 
 Usage:
-    from agents.action_types import ActionType, subscribe, make_action_message
+    from agents.action_types import ActionType, make_action_message
 
-    @subscribe(ActionType.PRD_READY)
     def code_generator_node(state):
         ...
         return {"messages": [make_action_message("...", ActionType.CODE_READY, "generate")]}
@@ -47,9 +46,9 @@ class ActionType(StrEnum):
 
 class SubscriptionRegistry:
     """
-    Singleton registry. Nodes self-register with @subscribe at import time.
-    The Manager queries this at runtime — knowledge of "who listens to what"
-    lives in the Role (node), not in a central config.
+    [DEPRECATED] Singleton registry.
+    Formerly used for Pub-Sub routing. Now kept only for backward compatibility.
+    The new orchestrator uses dynamic LLM routing instead of fixed subscriptions.
     """
     _instance = None
 
@@ -85,17 +84,8 @@ registry = SubscriptionRegistry()
 
 def subscribe(*action_types: ActionType, node_name: str = None):
     """
-    Decorator: registers the node function for the given action types.
-
-    Args:
-        action_types: ActionType values this node watches.
-        node_name: Explicit graph node name. If not provided, inferred by
-                   stripping the '_node' suffix from the function name.
-
-    Example:
-        @subscribe(ActionType.PRD_READY, node_name="generate")
-        def code_generator_node(state): ...
-        # → registers "generate" for "prd_ready"
+    [DEPRECATED] Decorator: registers the node function.
+    No longer used for routing. Kept only so existing code doesn't break.
     """
     def decorator(fn):
         name = node_name or getattr(fn, '_node_name', None)

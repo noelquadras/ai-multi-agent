@@ -12,8 +12,8 @@ from agents.state import AgentState
 from agents.action_types import ActionType
 from agents.nodes import (
     # Pub-Sub infrastructure
-    manager_node,
-    manager_router,
+    orchestrator_node,
+    orchestrator_router,
     registry,
     # Node functions (import triggers @subscribe registration)
     spec_writer_node,
