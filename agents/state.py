@@ -59,6 +59,23 @@ class TaskProfile(TypedDict, total=False):
     rationale: str
 
 
+class TaskInfo(TypedDict, total=False):
+    """Information about a task in the plan."""
+    task_id: str
+    instruction: str
+    task_type: str
+    assignee: str
+    dependent_task_ids: list[str]
+    is_finished: bool
+    result: str
+
+
+class TaskPlan(TypedDict, total=False):
+    """Dynamic task plan created by the manager."""
+    goal: str
+    tasks: list[TaskInfo]
+
+
 class AgentMetrics(TypedDict):
     """Token usage and invocation metrics per agent."""
     calls: int
@@ -86,6 +103,12 @@ class AgentState(TypedDict):
     # ── Global Shared Context (Single-Writer Pattern) ──────────────────
     # Task Profile: Written only by Classifier/Supervisor.
     task_profile: Optional[TaskProfile]
+    
+    # Task Plan: Dynamic plan created by manager for task execution
+    task_plan: Optional[TaskPlan]
+    
+    # Retry Strategy: Hint for retrying with different approach
+    _retry_strategy: Optional[str]
     
     # ── Per-Agent Isolated States ─────────────────────────────────────
     # Each agent 'Worker-A' should only update state['agent_states']['Worker-A']
