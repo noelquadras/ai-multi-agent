@@ -85,8 +85,23 @@ def decision_maker_node(state: AgentState) -> AgentState:
             
         elif review_state.get("review_report_structured"):
             # 2. Deterministic decision from structured review — NO LLM call
+            # review = ReviewOutput(**review_state["review_report_structured"])
+            # decision = "YES" if review.verdict == "NEEDS_REFINE" else "NO"
             review = ReviewOutput(**review_state["review_report_structured"])
-            decision = "YES" if review.verdict == "NEEDS_REFINE" else "NO"
+            make_iterations = state.get("make_iterations", 0)
+            score = review.overall_score
+            critical_count = len(review.critical_issues)
+
+            # Practical approval policy
+            if critical_count > 0:
+                decision = "YES"
+            elif score >= 7:
+                decision = "NO"
+            elif make_iterations >= 2:
+                decision = "NO"
+            else:
+                decision = "YES"
+
             rationale = (f"Deterministic: verdict={review.verdict}, "
                          f"score={review.overall_score}/10, "
                          f"{len(review.critical_issues)} critical issue(s)")
@@ -132,6 +147,18 @@ def decision_maker_node(state: AgentState) -> AgentState:
                 rationale=rationale
             ).model_dump()
         
+        # ── Mutate execution_plan IN MAKE ────────────────────────────
+        import copy
+        exec_plan = copy.deepcopy(state.get("execution_plan", []))
+        
+        for step in exec_plan:
+            if step["phase"] == "MAKE":
+                if decision == "NO":
+                    step["status"] = "completed"
+                else:
+                    step["status"] = "in_progress"
+                break
+                
         # ── Thin wrapper: verdict → action_type ────────────────────────────
         action = _decision_to_action(decision)
 
@@ -155,13 +182,19 @@ def decision_maker_node(state: AgentState) -> AgentState:
             "decision_output": decision_output_dict
         }
 
-        return {
+        result_state = {
             "agent_states": {"decide": decide_data},
             "messages": [make_action_message(
                 f"{decision}: {rationale}", action, "decide"
             )],
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            "execution_plan": exec_plan
         }
+        
+        if decision == "YES":
+            result_state["make_iterations"] = state.get("make_iterations", 0) + 1
+            
+        return result_state
     except Exception as e:
         emit_event(state["task_id"], {
             "type": "system_error",

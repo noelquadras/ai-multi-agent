@@ -76,10 +76,18 @@ class TaskPlan(TypedDict, total=False):
     tasks: list[TaskInfo]
 
 
-class AgentMetrics(TypedDict):
-    """Token usage and invocation metrics per agent."""
-    calls: int
+class PlanStep(TypedDict):
+    """A strictly structured step in the execution plan."""
+    step_id: int
+    phase: Literal["PLAN", "MAKE", "TEST"]
+    description: str
+    status: Literal["pending", "in_progress", "completed", "failed"]
+
+
+class AgentMetrics(TypedDict, total=False):
+    """Token usage and execution time metrics per phase."""
     tokens: int
+    execution_time: float
 
 
 class AgentState(TypedDict):
@@ -114,7 +122,7 @@ class AgentState(TypedDict):
     # Each agent 'Worker-A' should only update state['agent_states']['Worker-A']
     agent_states: Annotated[dict[str, dict[str, Any]], merge_agent_states]
     
-    # ── Global Metrics (Merge-Safe) ───────────────────────────────────
+    # Global Metrics (Merge-Safe) ───────────────────────────────────
     agent_metrics: Annotated[dict[str, AgentMetrics], merge_dict]
     total_tokens_used: Optional[int]
 
@@ -122,6 +130,16 @@ class AgentState(TypedDict):
     # Managers should be the ones incrementing these
     iteration_count: int
     debug_loop_count: int
+    plan_iterations: int
+    make_iterations: int
+    test_iterations: int
+
+    # ── Nested Graph & Autonomous State ───────────────────────────────
+    execution_plan: list[PlanStep]
+    failure_type: Optional[Literal["runtime_error", "syntax_error", "logical_failure", "spec_mismatch", "timeout", "unknown"]]
+    confidence_score: float
+    acceptance_criteria: dict
+    phase: Optional[Literal["PLAN", "MAKE", "TEST", "DONE"]]
 
     # ── Core LangGraph State ──────────────────────────────────────────
     messages: Annotated[Sequence[BaseMessage], add_messages]

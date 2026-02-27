@@ -138,6 +138,19 @@ def spec_writer_node(state: AgentState) -> AgentState:
         edge_cases_count = len(spec_structured.get("key_edge_cases", [])) if spec_structured else 0
         summary = f"Technical spec completed. Complexity: {complexity}, Edge cases: {edge_cases_count}."
         
+        # Initialize execution plan and acceptance criteria if not exists
+        exec_plan = state.get("execution_plan") or []
+        if not exec_plan:
+            exec_plan = [
+                {"step_id": 1, "phase": "PLAN", "description": "Write technical specification", "status": "completed"},
+                {"step_id": 2, "phase": "MAKE", "description": "Generate and refine code", "status": "pending"},
+                {"step_id": 3, "phase": "TEST", "description": "Test code behavior", "status": "pending"}
+            ]
+        
+        acc_criteria = state.get("acceptance_criteria") or {}
+        if not acc_criteria and spec_structured:
+            acc_criteria = {"must_handle": spec_structured.get("key_edge_cases", [])}
+
         completion_event = {
             "type": "spec_completed",
             "agent": "spec_writer",
@@ -148,7 +161,10 @@ def spec_writer_node(state: AgentState) -> AgentState:
         return {
             "agent_states": {"spec_writer": spec_data},
             "messages": [make_action_message(summary, ActionType.PRD_READY, "spec_writer")],
-            "events": [completion_event]
+            "events": [completion_event],
+            "plan_iterations": state.get("plan_iterations", 0) + 1,
+            "execution_plan": exec_plan,
+            "acceptance_criteria": acc_criteria
         }
     except Exception as e:
         error_event = {

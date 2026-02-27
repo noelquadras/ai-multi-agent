@@ -280,5 +280,6 @@ def cli_tester_node(state: AgentState) -> AgentState:
             "\n".join(test_results),
             ActionType.TEST_COMPLETE, "test"
         )],
-        "iteration_count": state.get("iteration_count", 0) + 1
+        "iteration_count": state.get("iteration_count", 0) + 1,
+        "test_iterations": state.get("test_iterations", 0) + 1
     }

@@ -114,6 +114,14 @@ def code_generator_node(state: AgentState) -> AgentState:
             "code": clean_code_output(code)
         })
         
+        # ── Mutate execution_plan IN MAKE (generate) ─────────────────────────
+        import copy
+        exec_plan = copy.deepcopy(state.get("execution_plan", []))
+        for step in exec_plan:
+            if step["phase"] == "MAKE":
+                step["status"] = "in_progress"
+                break
+                
         return {
             "agent_states": {"generate": {"generated_code": code}},
             "messages": [make_action_message(
@@ -121,6 +129,9 @@ def code_generator_node(state: AgentState) -> AgentState:
                 ActionType.CODE_READY, "generate"
             )],
             "iteration_count": state.get("iteration_count", 0) + 1,
+            "make_iterations": state.get("make_iterations", 0) + 1,
+            "execution_plan": exec_plan,
+            "make_iterations": state.get("make_iterations", 0) + 1,
             "events": [{
                 "type": "code_generated",
                 "agent": "coder",

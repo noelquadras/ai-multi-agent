@@ -65,11 +65,6 @@ def check_model_tool_support(model_name: str) -> bool:
         test_llm = ChatOllama(model=model_name, base_url="http://localhost:11434", temperature=0.1)
         # Try to bind a simple tool - if it fails, model doesn't support tools
         test_llm.bind_tools([search_duckduckgo])
-        # If binding succeeded, do a quick test call
-        try:
-            test_llm.invoke([HumanMessage(content="hi")])
-        except Exception:
-            pass  # Binding succeeded even if invoke might have issues
         _model_tool_support_cache[model_name] = True
         return True
     except Exception as e:

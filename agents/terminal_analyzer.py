@@ -79,14 +79,26 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
         analyze_data = {
             "analysis": "PASS",
             "analysis_structured": pass_output.model_dump(),
-            "decision": "NO"
+            "decision": "NO",
+            "failure_type": None
         }
+        # ── Mutate execution_plan IN TEST (PASS) ────────────────────────────
+        import copy
+        exec_plan = copy.deepcopy(state.get("execution_plan", []))
+        for step in exec_plan:
+            if step["phase"] == "TEST":
+                step["status"] = "completed"
+                break
+                
         return {
             "agent_states": {"analyze_test": analyze_data},
             "messages": [make_action_message(
                 "PASS: Code executed successfully",
                 ActionType.ANALYSIS_PASS, "analyze_test"
             )],
+            "failure_type": None,
+            "test_iterations": state.get("test_iterations", 0) + 1,
+            "execution_plan": exec_plan
         }
     
     messages = _terminal_analyzer_prompt.format_messages(
@@ -159,16 +171,43 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
         emit_event(state["task_id"], {"type": "agent_end", "agent": "analyzer"})
         emit_event(state["task_id"], {"type": "log", "message": "[AGENT_END analyzer]"})
         
+        # Map to structured failure_type for routing
+        failure_type = None
+        if verdict != "PASS":
+            err_map = {
+                "syntax": "syntax_error",
+                "runtime": "runtime_error",
+                "assertion": "logical_failure",
+                "timeout": "timeout",
+            }
+            mapped = err_map.get((analysis_output_dict or {}).get("error_type", ""), "unknown")
+            failure_type = mapped
+        
         analyze_data = {
             "analysis": analysis,
-            "analysis_structured": analysis_output_dict
+            "analysis_structured": analysis_output_dict,
+            "failure_type": failure_type
         }
         
+        # ── Mutate execution_plan IN TEST ────────────────────────────
+        import copy
+        exec_plan = copy.deepcopy(state.get("execution_plan", []))
+        for step in exec_plan:
+            if step["phase"] == "TEST":
+                if verdict == "PASS":
+                    step["status"] = "completed"
+                else:
+                    step["status"] = "failed"
+                break
+                
         return {
             "agent_states": {"analyze_test": analyze_data},
             "messages": [make_action_message(
                 f"{verdict}: {analysis}", action, "analyze_test"
             )],
+            "failure_type": failure_type,
+            "test_iterations": state.get("test_iterations", 0) + 1,
+            "execution_plan": exec_plan
         }
         
     except Exception as e:
@@ -193,5 +232,6 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
             "messages": [make_action_message(
                 f"Analysis failed: {str(e)}",
                 ActionType.ANALYSIS_FIX, "analyze_test"
-            )]
+            )],
+            "failure_type": "unknown"
         }

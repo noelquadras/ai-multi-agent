@@ -119,7 +119,8 @@ def code_reviewer_node(state: AgentState) -> AgentState:
         return {
             "agent_states": {"review": review_data},
             "messages": [make_action_message(review_summary, ActionType.REVIEW_READY, "review")],
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            "confidence_score": (review_output_dict.get("overall_score", 0) / 10.0) if review_output_dict else 0.5
         }
     except Exception as e:
         emit_event(state["task_id"], {

@@ -9,6 +9,7 @@ from langgraph.pregel._retry import RetryPolicy
 from langgraph.prebuilt import ToolNode
 from tools.langchain_tools import search_duckduckgo, search_serper, scrape_web_page
 from agents.state import AgentState
+from agents.action_types import ActionType
 from agents.nodes import (
     # Pub-Sub infrastructure
     manager_node,
@@ -59,21 +60,69 @@ def clean_output(text: str) -> str:
 # Compiled graph cache — avoids re-building on every task
 _compiled_graph = None
 
+def build_plan_graph():
+    builder = StateGraph(AgentState)
+    builder.add_node("spec_writer", spec_writer_node, retry=_llm_retry)
+    builder.add_node("researcher", researcher_node, retry=_llm_retry)
+    builder.set_entry_point("spec_writer")
+    
+    def plan_router(state: AgentState):
+        messages = state.get("messages", [])
+        if not messages: return END
+        last_action = getattr(messages[-1], "additional_kwargs", {}).get("action_type", "")
+        if last_action == str(ActionType.NEEDS_RESEARCH):
+            return "researcher"
+        if getattr(messages[-1], "additional_kwargs", {}).get("sender") == "researcher":
+            return "spec_writer"
+        return END
+
+    builder.add_conditional_edges(
+        "spec_writer", 
+        plan_router, 
+        {"researcher": "researcher", "spec_writer": "spec_writer", END: END}
+    )
+    builder.add_edge("researcher", "spec_writer")
+    return builder.compile()
+
+def build_make_graph():
+    builder = StateGraph(AgentState)
+    builder.add_node("generate", code_generator_node, retry=_llm_retry)
+    builder.add_node("review", code_reviewer_node, retry=_llm_retry)
+    builder.add_node("decide", decision_maker_node, retry=_llm_retry)
+    builder.add_node("refine", code_refiner_node, retry=_llm_retry)
+    
+    builder.set_entry_point("generate")
+    
+    builder.add_edge("generate", "review")
+    builder.add_edge("review", "decide")
+    builder.add_edge("refine", "review")
+    
+    def decide_router(state: AgentState):
+        decision = state.get("agent_states", {}).get("decide", {}).get("decision", "YES")
+        if decision == "NO":
+            return END
+        return "refine"
+        
+    builder.add_conditional_edges("decide", decide_router, {"refine": "refine", END: END})
+    return builder.compile()
+
+def build_test_graph():
+    builder = StateGraph(AgentState)
+    builder.add_node("test", cli_tester_node)
+    builder.add_node("analyze_test", terminal_analyzer_node, retry=_llm_retry)
+    builder.set_entry_point("test")
+    builder.add_edge("test", "analyze_test")
+    builder.add_edge("analyze_test", END)
+    return builder.compile()
 
 def create_agent_graph():
     """
     Create (or return cached) the compiled LangGraph state graph.
     
-    Pub-Sub Architecture (MetaGPT-style Hub-and-Spoke):
-        START → manager (LLM-powered router)
-        Every agent node → manager
-        manager → (Send with filtered state) → subscriber nodes OR END
-    
-    Agents self-register via @subscribe decorators. To add a new agent:
-    1. Create a new node file in agents/
-    2. Decorate it with @subscribe(ActionType.SOME_ACTION)
-    3. Import it here — registration happens automatically
-    No edge changes needed.
+    Nested Graph Architecture:
+        START → manager
+        manager → PLAN_GRAPH, MAKE_GRAPH, TEST_GRAPH, or END
+        Phase Graphs → manager
     """
     global _compiled_graph
     if _compiled_graph is not None:
@@ -82,47 +131,70 @@ def create_agent_graph():
     # Initialize graph with state schema
     workflow = StateGraph(AgentState)
     
-    # ── The Hub: LLM-powered Manager ────────────────────────────────────
+    # ── The Hub: Phase Router Manager ────────────────────────────────────
     workflow.add_node("manager", manager_node)
     
-    # ── The Spokes: Agent nodes ─────────────────────────────────────────
-    # LLM-calling nodes get a retry policy for transient failures
-    workflow.add_node("spec_writer", spec_writer_node, retry=_llm_retry)
-    workflow.add_node("generate", code_generator_node, retry=_llm_retry)
-    workflow.add_node("review", code_reviewer_node, retry=_llm_retry)
-    workflow.add_node("decide", decision_maker_node, retry=_llm_retry)
-    workflow.add_node("refine", code_refiner_node, retry=_llm_retry)
-    workflow.add_node("document", doc_writer_node, retry=_llm_retry)
-    workflow.add_node("test", cli_tester_node)  # no retry — deterministic executor
-    workflow.add_node("analyze_test", terminal_analyzer_node, retry=_llm_retry)
-    workflow.add_node("classify_task", classify_task_node, retry=_llm_retry)
-    workflow.add_node("researcher", researcher_node, retry=_llm_retry)
+    # ── Phase Guards ─────────────────────────────────────────────────────
+    def plan_guard(state: AgentState):
+        if state.get("phase") != "PLAN": return {"messages": []} # returning empty effectively acts as a pass-through
+        return {"current_agent": "plan_guard"}
+        
+    def make_guard(state: AgentState):
+        if state.get("phase") != "MAKE": return {"messages": []}
+        return {"current_agent": "make_guard"}
+        
+    def test_guard(state: AgentState):
+        if state.get("phase") != "TEST": return {"messages": []}
+        return {"current_agent": "test_guard"}
+        
+    def plan_guard_edge(state: AgentState):
+        if state.get("phase") != "PLAN": return END
+        return "PLAN_GRAPH"
+        
+    def make_guard_edge(state: AgentState):
+        if state.get("phase") != "MAKE": return END
+        return "MAKE_GRAPH"
+        
+    def test_guard_edge(state: AgentState):
+        if state.get("phase") != "TEST": return END
+        return "TEST_GRAPH"
+
+    workflow.add_node("plan_guard", plan_guard)
+    workflow.add_node("make_guard", make_guard)
+    workflow.add_node("test_guard", test_guard)
+
+    # ── The Phase Subgraphs ──────────────────────────────────────────────
+    workflow.add_node("PLAN_GRAPH", build_plan_graph())
+    workflow.add_node("MAKE_GRAPH", build_make_graph())
+    workflow.add_node("TEST_GRAPH", build_test_graph())
     
-    # ── Tool execution node ─────────────────────────────────────────────
-    # Make tools available to the ToolNode
     tools = [search_duckduckgo, search_serper, scrape_web_page]
     tool_node = ToolNode(tools)
     workflow.add_node("tools", tool_node, retry=_llm_retry)
     
-    # ── Edge wiring: Hub-and-Spoke ──────────────────────────────────────
-    # Entry point: START → manager
+    # ── Edge wiring ──────────────────────────────────────────────────────
     workflow.set_entry_point("manager")
     
-    # Every spoke points back to the hub
-    for node_name in ["spec_writer", "generate", "review", "decide",
-                      "refine", "document", "test", "analyze_test",
-                      "classify_task", "researcher"]:
+    # Hub-and-Spoke to Subgraphs
+    for node_name in ["PLAN_GRAPH", "MAKE_GRAPH", "TEST_GRAPH", "tools"]:
         workflow.add_edge(node_name, "manager")
         
-    # Tool node points back to the manager (so LLM can read tool output)
-    workflow.add_edge("tools", "manager")
-    
-    # Manager routes via conditional edge — returns Send() objects, END, or "tools"
-    workflow.add_conditional_edges("manager", manager_router)
-    
-    # Log the subscription table for debugging
-    subs = registry.all_subscriptions()
-    print(f"Subscription Table: {subs}", flush=True)
+    workflow.add_conditional_edges("plan_guard", plan_guard_edge, {"PLAN_GRAPH": "PLAN_GRAPH", END: END})
+    workflow.add_conditional_edges("make_guard", make_guard_edge, {"MAKE_GRAPH": "MAKE_GRAPH", END: END})
+    workflow.add_conditional_edges("test_guard", test_guard_edge, {"TEST_GRAPH": "TEST_GRAPH", END: END})
+        
+    workflow.add_conditional_edges(
+        "manager", 
+        manager_router,
+        {
+            "PLAN_GRAPH": "plan_guard",
+            "MAKE_GRAPH": "make_guard",
+            "TEST_GRAPH": "test_guard",
+            "tools": "tools",
+            "manager": "manager",
+            END: END
+        }
+    )
     
     compiled = workflow.compile(checkpointer=_checkpointer)
     _compiled_graph = compiled
