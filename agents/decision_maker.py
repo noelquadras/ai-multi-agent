@@ -85,15 +85,29 @@ def decision_maker_node(state: AgentState) -> AgentState:
             
         elif review_state.get("review_report_structured"):
             # 2. Deterministic decision from structured review — NO LLM call
-            # review = ReviewOutput(**review_state["review_report_structured"])
-            # decision = "YES" if review.verdict == "NEEDS_REFINE" else "NO"
             review = ReviewOutput(**review_state["review_report_structured"])
             make_iterations = state.get("make_iterations", 0)
             score = review.overall_score
             critical_count = len(review.critical_issues)
 
+            import hashlib
+            issues_hash = hashlib.md5(str(sorted(review.critical_issues)).encode()).hexdigest()
+
+            decide_state = llm_states.get("decide", {})
+            last_score = decide_state.get("last_review_score", 0.0)
+            last_hash = decide_state.get("last_critical_issues_hash", "")
+            convergence_counter = decide_state.get("convergence_counter", 0)
+
+            if issues_hash == last_hash and abs(score - last_score) < 1:
+                convergence_counter += 1
+            else:
+                convergence_counter = 0
+
             # Practical approval policy
-            if critical_count > 0:
+            if convergence_counter >= 2:
+                decision = "NO"
+                rationale = "Convergence detected — approving to prevent infinite refinement."
+            elif critical_count > 0:
                 decision = "YES"
             elif score >= 7:
                 decision = "NO"
@@ -102,9 +116,11 @@ def decision_maker_node(state: AgentState) -> AgentState:
             else:
                 decision = "YES"
 
-            rationale = (f"Deterministic: verdict={review.verdict}, "
-                         f"score={review.overall_score}/10, "
-                         f"{len(review.critical_issues)} critical issue(s)")
+            if convergence_counter < 2:
+                rationale = (f"Deterministic: verdict={review.verdict}, "
+                             f"score={review.overall_score}/10, "
+                             f"{len(review.critical_issues)} critical issue(s)")
+
             emit_event(state["task_id"], {
                 "type": "log",
                 "message": f"⚡ Deterministic decision from structured review (no LLM call)"
@@ -181,6 +197,13 @@ def decision_maker_node(state: AgentState) -> AgentState:
             "decision": decision,
             "decision_output": decision_output_dict
         }
+        
+        try:
+            decide_data["last_review_score"] = score
+            decide_data["last_critical_issues_hash"] = issues_hash
+            decide_data["convergence_counter"] = convergence_counter
+        except NameError:
+            pass
 
         result_state = {
             "agent_states": {"decide": decide_data},
@@ -188,7 +211,11 @@ def decision_maker_node(state: AgentState) -> AgentState:
                 f"{decision}: {rationale}", action, "decide"
             )],
             "iteration_count": state.get("iteration_count", 0) + 1,
-            "execution_plan": exec_plan
+            "execution_plan": exec_plan,
+            "events": [{
+                "type": "phase_complete",
+                "phase": "MAKE"
+            }]
         }
         
         if decision == "YES":

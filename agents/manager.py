@@ -41,7 +41,7 @@ _manager_prompt = ChatPromptTemplate.from_messages([
      "- DONE: Terminates the workflow successfully.\n\n"
      "CRITICAL ROUTING RULES:\n"
      "1. You MUST use RoutePhase or AskHuman tool.\n"
-     "2. You can determine the phase based on iteration counts, failure types, and execution plan states.\n"
+     "2. If last_event.type == 'phase_complete' and last_event.phase == 'MAKE': decide next phase based on failure_type and confidence_score.\n"
      "3. Do NOT route to DONE unless TEST passed, PLAN & MAKE both completed at least once, acceptance_criteria is satisfied, and confidence_score >= 0.75.\n"
      ),
     ("human",
@@ -52,7 +52,7 @@ _manager_prompt = ChatPromptTemplate.from_messages([
      "- Test iterations: {test_iterations}\n"
      "- Failure type: {failure_type}\n"
      "- Confidence Score: {confidence_score}\n"
-     "- Phase: {phase}\n"
+     "- Last Event: {last_event}\n"
      "- Acceptance Criteria: {acceptance_criteria}\n\n"
      "Execution Plan Step Statuses:\n"
      "{execution_plan_summary}\n\n"
@@ -123,23 +123,36 @@ def manager_node(state: AgentState) -> dict:
     test_iterations = state.get("test_iterations", 0)
     plan_iterations = state.get("plan_iterations", 0)
     failure_type = state.get("failure_type")
+
+    events = state.get("events", [])
+    last_event = events[-1] if events else {}
+    last_event_phase = last_event.get("phase", "")
+
+    decide_state = state.get("agent_states", {}).get("decide", {})
+    last_decision = decide_state.get("decision", "")
     
     # Escalation Pre-Routing
     if plan_iterations > 2:
         msg = AskHuman(question="Maximum plan iterations exceeded. Humans must intervene.").model_dump()
         return {"messages": [AIMessage(content="", tool_calls=[{"name": "AskHuman", "args": msg, "id": "esc"}])], "current_agent": "manager"}
-    if make_iterations > 3 and state.get("phase") != "PLAN":
-        msg = RoutePhase(next_phase="PLAN", rationale="make_iterations > 3, escalating to PLAN phase for rethink.").model_dump()
-        emit_event(task_id, {"type": "log", "message": f"Escalation: make_iterations ({make_iterations}) > 3. Re-entering PLAN."})
-        return {"messages": [AIMessage(content="", tool_calls=[{"name": "RoutePhase", "args": msg, "id": "esc"}])], "current_agent": "manager"}
-    if test_iterations > 2 and state.get("phase") != "PLAN":
-        msg = RoutePhase(next_phase="PLAN", rationale="test_iterations > 2, escalating to PLAN phase for rethink.").model_dump()
-        emit_event(task_id, {"type": "log", "message": f"Escalation: test_iterations ({test_iterations}) > 2. Re-entering PLAN."})
-        return {"messages": [AIMessage(content="", tool_calls=[{"name": "RoutePhase", "args": msg, "id": "esc"}])], "current_agent": "manager"}
-    if failure_type in ["logical_failure", "spec_mismatch"] and state.get("phase") != "PLAN":
-        msg = RoutePhase(next_phase="PLAN", rationale=f"failure_type {failure_type} requires re-planning.").model_dump()
-        emit_event(task_id, {"type": "log", "message": f"Escalation: failure_type was {failure_type}. Re-entering PLAN."})
-        return {"messages": [AIMessage(content="", tool_calls=[{"name": "RoutePhase", "args": msg, "id": "esc"}])], "current_agent": "manager"}
+        
+    if make_iterations > 3 and last_event_phase != "PLAN":
+        if last_decision != "NO":
+            msg = RoutePhase(next_phase="PLAN", rationale="make_iterations > 3 and decision not approved, escalating to PLAN.").model_dump()
+            emit_event(task_id, {"type": "log", "message": f"Escalation: make_iterations ({make_iterations}) > 3. Re-entering PLAN."})
+            return {"messages": [AIMessage(content="", tool_calls=[{"name": "RoutePhase", "args": msg, "id": "esc"}])], "current_agent": "manager", "phase": "PLAN", "events": [{"type": "phase_started", "phase": "PLAN"}]}
+
+    if test_iterations > 2 and last_event_phase != "PLAN":
+        if last_decision != "NO":
+            msg = RoutePhase(next_phase="PLAN", rationale="test_iterations > 2, escalating to PLAN phase for rethink.").model_dump()
+            emit_event(task_id, {"type": "log", "message": f"Escalation: test_iterations ({test_iterations}) > 2. Re-entering PLAN."})
+            return {"messages": [AIMessage(content="", tool_calls=[{"name": "RoutePhase", "args": msg, "id": "esc"}])], "current_agent": "manager", "phase": "PLAN", "events": [{"type": "phase_started", "phase": "PLAN"}]}
+
+    if failure_type in ["logical_failure", "spec_mismatch"] and last_event_phase != "PLAN":
+        if last_decision != "NO":
+            msg = RoutePhase(next_phase="PLAN", rationale=f"failure_type {failure_type} requires re-planning.").model_dump()
+            emit_event(task_id, {"type": "log", "message": f"Escalation: failure_type was {failure_type}. Re-entering PLAN."})
+            return {"messages": [AIMessage(content="", tool_calls=[{"name": "RoutePhase", "args": msg, "id": "esc"}])], "current_agent": "manager", "phase": "PLAN", "events": [{"type": "phase_started", "phase": "PLAN"}]}
 
     # Evaluate execution_plan summary
     exec_plan = state.get("execution_plan", [])
@@ -151,7 +164,7 @@ def manager_node(state: AgentState) -> dict:
     
     # Check for unchanged plan escalation
     if plan_iterations > last_plan_iterations and last_plan_iterations > 0:
-        if exec_plan and exec_plan == last_plan:
+        if exec_plan and exec_plan == last_plan and failure_type is not None:
             msg = AskHuman(question="Infinite phase cycling detected: execution_plan remains unchanged across two PLAN phases.").model_dump()
             return {"messages": [AIMessage(content="", tool_calls=[{"name": "AskHuman", "args": msg, "id": "esc"}])], "current_agent": "manager"}
 
@@ -174,7 +187,7 @@ def manager_node(state: AgentState) -> dict:
         test_iterations=test_iterations,
         failure_type=failure_type or "None",
         confidence_score=state.get("confidence_score", 0.0),
-        phase=state.get("phase", "None"),
+        last_event=json.dumps(events[-1]) if events else "None",
         acceptance_criteria=json.dumps(state.get("acceptance_criteria", {})),
         execution_plan_summary=ep_summary
     )
@@ -197,6 +210,7 @@ def manager_node(state: AgentState) -> dict:
         response = AIMessage(content="", tool_calls=[{"name": "AskHuman", "args": {"question": "I had an internal error determining the next step."}, "id": "err"}])
 
     phase_update = {}
+    phase_events = []
     if getattr(response, "tool_calls", []):
         for tc in response.tool_calls:
             if tc.get("name") == "RoutePhase":
@@ -204,13 +218,24 @@ def manager_node(state: AgentState) -> dict:
                 phase_update["phase"] = next_phase
                 if state.get("phase") != "MAKE" and next_phase == "MAKE":
                     phase_update["failure_type"] = None
+                    
+                if next_phase != state.get("phase"):
+                    phase_events.append({
+                        "type": "phase_started",
+                        "phase": next_phase
+                    })
 
-    return {
+    ret_state = {
         "messages": [response],
         "current_agent": "manager",
         "agent_states": {"manager": {"last_plan": exec_plan, "last_plan_iterations": plan_iterations}},
         **phase_update
     }
+    
+    if phase_events:
+        ret_state["events"] = phase_events
+        
+    return ret_state
 
 
 def manager_router(state: AgentState):

@@ -28,6 +28,7 @@ from agents.nodes import (
     researcher_node,
     set_model_config,
 )
+from agents.manager import manager_node, manager_router
 from typing import Dict, Optional
 from database import emit_event
 
