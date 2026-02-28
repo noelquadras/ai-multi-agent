@@ -163,7 +163,28 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const { isMobile, state, openMobile, setOpenMobile, setOpen } = useSidebar()
+
+  // Add click-outside listener for desktop overlay behavior
+  React.useEffect(() => {
+    if (isMobile || state === "collapsed") return
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node
+      // If we clicked outside any element marked as part of the sidebar
+      if (!document.documentElement.contains(target)) return
+
+      const isInsideSidebar = (target as Element).closest('[data-sidebar="sidebar"]')
+      const isSidebarTrigger = (target as Element).closest('[data-sidebar="trigger"]')
+
+      if (!isInsideSidebar && !isSidebarTrigger) {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [isMobile, state, setOpen])
 
   if (collapsible === "none") {
     return (
@@ -218,12 +239,15 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
-          "group-data-[collapsible=offcanvas]:w-0",
+          "relative bg-transparent transition-[width] duration-200 ease-linear",
           "group-data-[side=right]:rotate-180",
-          variant === "floating" || variant === "inset"
-            ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]"
-            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)"
+          // When collapsible is "icon", keep the gap FIXED to the icon width to prevent layout shift.
+          // The actual sidebar will then float over the content as an overlay.
+          collapsible === "icon"
+            ? (variant === "floating" || variant === "inset"
+              ? "w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]"
+              : "w-(--sidebar-width-icon)")
+            : "w-(--sidebar-width) group-data-[collapsible=offcanvas]:w-0"
         )}
       />
       <div
@@ -569,7 +593,7 @@ function SidebarMenuAction({
         "peer-data-[size=lg]/menu-button:top-2.5",
         "group-data-[collapsible=icon]:hidden",
         showOnHover &&
-          "peer-data-[active=true]/menu-button:text-sidebar-accent-foreground group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 data-[state=open]:opacity-100 md:opacity-0",
+        "peer-data-[active=true]/menu-button:text-sidebar-accent-foreground group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 data-[state=open]:opacity-100 md:opacity-0",
         className
       )}
       {...props}
