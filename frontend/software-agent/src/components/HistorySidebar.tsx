@@ -44,6 +44,7 @@ import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
   SidebarSeparator,
   useSidebar,
 } from "@/components/ui/sidebar";
@@ -405,6 +406,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+      <SidebarRail />
     </Sidebar>
   );
 }

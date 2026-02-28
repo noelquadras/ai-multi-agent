@@ -14,7 +14,6 @@ import { HistorySidebar } from "@/components/HistorySidebar";
 import {
   SidebarInset,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
 
 /* =========================
@@ -143,13 +142,8 @@ export default function HomePage() {
       <HistorySidebar apiStatus={apiStatus} />
       <SidebarInset>
         <main className="min-h-screen bg-background text-foreground flex flex-col">
-          {/* Minimal top strip — just the sidebar trigger */}
-          <div className="h-12 flex items-center px-4">
-            <SidebarTrigger />
-          </div>
-
           {/* Main Content */}
-          <div className="flex-1 flex flex-col items-center pt-16 px-4">
+          <div className="flex-1 flex flex-col items-center pt-24 px-4">
             {/* Header */}
             <div className="flex items-center gap-3 mb-2">
               <h1 className="text-3xl font-bold">Multi-Agent AI Software Team</h1>
