@@ -1,30 +1,30 @@
 """
-Pure ReAct Supervisor (Intent-Gated Version)
+Pure ReAct Supervisor (Stable Intent-Gated Version)
 
 Flow:
-1. Classify intent (once).
-2. If QUICK → direct response.
-3. If AMBIGUOUS → ask clarification.
-4. If TASK → continue normal ReAct loop.
+1. Classify intent (once, structured).
+2. QUICK → direct response.
+3. AMBIGUOUS → clarification.
+4. TASK → ReAct loop.
+5. Convergence + spam protection enabled.
 """
 
 from typing import Literal, List
 from datetime import datetime
-import json
 import hashlib
+import json
 from dataclasses import dataclass, field
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage
 from agents.state import AgentState
 from agents.action_types import ActionType, make_action_message
 from agents.llm_config import get_llm, check_interrupts
 from database import emit_event
 
 
-# ─────────────────────────────────────────────────────────────
-# STRUCTURED PLAN
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# PLAN STRUCTURE
+# ─────────────────────────────────────────────
 
 @dataclass
 class TaskItem:
@@ -65,15 +65,15 @@ def ensure_plan_object(obj):
     return ReactPlan(goal="Complete task")
 
 
-# ─────────────────────────────────────────────────────────────
-# INTENT CLASSIFIER
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# INTENT TOOL
+# ─────────────────────────────────────────────
 
 class IntentTool(BaseModel):
     intent: Literal["QUICK", "TASK", "AMBIGUOUS"]
 
 
-def classify_intent(requirement: str, state: AgentState) -> str:
+def classify_intent(requirement: str, state: AgentState, task_id: str) -> str:
     llm = get_llm(
         for_heavy_task=False,
         override_model=state.get("agent_models", {}).get("supervisor", ""),
@@ -81,25 +81,29 @@ def classify_intent(requirement: str, state: AgentState) -> str:
     ).bind_tools([IntentTool])
 
     response = llm.invoke(
-        f"""Classify the user's request.
+        f"""Classify the user request.
 
 Return QUICK, TASK, or AMBIGUOUS.
 
-User request:
+User:
 {requirement}
 """
     )
 
     if not getattr(response, "tool_calls", []):
+        emit_event(task_id, {"type": "intent_error", "message": "No tool call from intent classifier."})
         return "TASK"
 
-    tool_call = response.tool_calls[0]
-    return tool_call["args"].get("intent", "TASK")
+    try:
+        return response.tool_calls[0]["args"]["intent"]
+    except Exception:
+        emit_event(task_id, {"type": "intent_error", "message": "Malformed intent tool call."})
+        return "TASK"
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # REACT TOOLS
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 class PlannerTool(BaseModel):
     action: Literal["append", "complete", "update"]
@@ -131,98 +135,67 @@ class EndWorkflow(BaseModel):
     summary: str
 
 
-# ─────────────────────────────────────────────────────────────
-# REACT PROMPT
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# PROMPT
+# ─────────────────────────────────────────────
 
 _react_prompt = ChatPromptTemplate.from_messages([
     ("system",
-     "You are an autonomous software supervisor using ReAct reasoning.\n"
+     "You are an autonomous software supervisor.\n"
      "You MUST call exactly one tool.\n"
-     "Do NOT output text.\n"),
+     "Do NOT output text."),
     ("human",
      "Time: {time}\n\n"
-     "Requirements:\n{requirements}\n\n"
+     "Requirement:\n{requirements}\n\n"
      "Plan:\n{plan}\n\n"
      "Recent Events:\n{events}\n\n"
-     "Decide next action."
-    )
+     "Decide next action.")
 ])
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # SUPERVISOR NODE
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 def react_supervisor_node(state: AgentState) -> dict:
     task_id = state.get("task_id", "unknown")
     check_interrupts(task_id)
 
     requirement = state.get("requirements", "")
+    intent = state.get("intent")
 
-    # ─── 1️⃣ INTENT GATE ─────────────────────────────────────
-
-    intent = state.get("intent", None)
+    # ─── INTENT GATE ─────────────────────────
 
     if not intent:
-        intent = classify_intent(requirement, state)
-        emit_event(task_id, {"type": "log", "message": f"Intent classified: {intent}"})
+        intent = classify_intent(requirement, state, task_id)
+        emit_event(task_id, {"type": "log", "message": f"Intent: {intent}"})
         return {"intent": intent}
 
-    # QUICK → direct answer (no agents)
     if intent == "QUICK":
-        quick_llm = get_llm(
-            for_heavy_task=False,
-            override_model=state.get("agent_models", {}).get("supervisor", ""),
-            base_model=state.get("model", "ollama"),
-        ).bind_tools([QuickResponse])
-
-        resp = quick_llm.invoke(f"Provide a direct answer to the user request. User: {requirement}")
-        answer = "I've handled your request."
-        if getattr(resp, "tool_calls", []):
-            answer = resp.tool_calls[0]["args"].get("response", answer)
-        elif resp.content:
-            answer = resp.content
-
         return {
             "terminate": True,
             "messages": [
                 make_action_message(
-                    answer,
+                    requirement,
                     ActionType.DECISION_REFINE,
                     "react_supervisor"
                 )
             ]
         }
 
-    # AMBIGUOUS → request clarification
     if intent == "AMBIGUOUS":
-        amb_llm = get_llm(
-            for_heavy_task=False,
-            override_model=state.get("agent_models", {}).get("supervisor", ""),
-            base_model=state.get("model", "ollama"),
-        ).bind_tools([ClarificationTool])
-
-        resp = amb_llm.invoke(f"The user request is ambiguous. Ask for clarification. User: {requirement}")
-        question = "Could you please provide more details?"
-        if getattr(resp, "tool_calls", []):
-            question = resp.tool_calls[0]["args"].get("question", question)
-        elif resp.content:
-            question = resp.content
-
         return {
             "terminate": True,
             "messages": [
                 make_action_message(
-                    question,
+                    "Please clarify your request.",
                     ActionType.DECISION_REFINE,
                     "react_supervisor"
                 )
             ]
         }
 
-    # Only TASK reaches here
-    # ─── 2️⃣ NORMAL REACT LOOP ───────────────────────────────
+    # ─── TASK → REACT LOOP ───────────────────
 
     react_plan = ensure_plan_object(state.get("react_plan_obj"))
     events = state.get("events", [])
@@ -238,92 +211,110 @@ def react_supervisor_node(state: AgentState) -> dict:
         f"- {t.task} ({t.status})" for t in react_plan.tasks
     ) or "No tasks yet."
 
-    messages = _react_prompt.format_messages(
-        time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        requirements=requirement,
-        plan=plan_summary,
-        events=str(recent_events),
+    response = llm.invoke(
+        _react_prompt.format_messages(
+            time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            requirements=requirement,
+            plan=plan_summary,
+            events=str(recent_events),
+        )
     )
 
-    response = llm.invoke(messages)
-
     if not getattr(response, "tool_calls", []):
-        emit_event(task_id, {"type": "system_error", "error": "No tool call"})
-        return {}
+        emit_event(task_id, {"type": "system_error", "error": "Supervisor produced no tool call."})
+        return {"terminate": True}
 
     tool_call = response.tool_calls[0]
     name = tool_call["name"]
     args = tool_call["args"]
 
-    updates = {
-        "react_plan_obj": react_plan
-    }
+    # ─── CONVERGENCE PROTECTION ──────────────
 
-    # ─── PlannerTool ─────────────────────────────────────────
+    meta = state.get("react_meta") or {"last_hash": "", "repeat": 0}
 
-    if name == "PlannerTool":
-        if args["action"] == "append":
-            react_plan.append(args["task"])
-        elif args["action"] == "complete":
-            react_plan.complete(args["task"])
-        elif args["action"] == "update":
-            react_plan.update(args["task"], args["new_status"])
+    signature = name + json.dumps(args, sort_keys=True)
+    current_hash = hashlib.md5(signature.encode()).hexdigest()
 
-        if react_plan.is_finished():
+    if current_hash == meta["last_hash"]:
+        meta["repeat"] += 1
+    else:
+        meta["repeat"] = 0
+
+    meta["last_hash"] = current_hash
+
+    if meta["repeat"] >= 2:
+        emit_event(task_id, {"type": "log", "message": "Convergence detected."})
+        return {"terminate": True}
+
+    updates = {"react_plan_obj": react_plan, "react_meta": meta}
+
+    # ─── TOOL EXECUTION ──────────────────────
+
+    try:
+        if name == "PlannerTool":
+            validated = PlannerTool(**args)
+
+            if validated.action == "append":
+                react_plan.append(validated.task)
+            elif validated.action == "complete":
+                react_plan.complete(validated.task)
+            elif validated.action == "update":
+                react_plan.update(validated.task, validated.new_status)
+
+            if react_plan.is_finished():
+                updates["terminate"] = True
+
+            return updates
+
+        if name == "TriggerAgent":
+            validated = TriggerAgent(**args)
+
+            mapping = {
+                "spec_writer": ActionType.PRD_READY,
+                "coder": ActionType.CODE_READY,
+                "reviewer": ActionType.REVIEW_READY,
+                "refiner": ActionType.DECISION_REFINE,
+                "tester": ActionType.TEST_COMPLETE,
+                "analyzer": ActionType.ANALYSIS_REGENERATE,
+            }
+
+            updates["messages"] = [
+                make_action_message(
+                    f"Supervisor triggered {validated.agent}: {validated.objective}",
+                    mapping[validated.agent],
+                    "react_supervisor",
+                )
+            ]
+            return updates
+
+        if name == "EndWorkflow":
             updates["terminate"] = True
+            return updates
 
-        return updates
+        if name == "QuickResponse":
+            updates["terminate"] = True
+            updates["messages"] = [
+                make_action_message(args.get("response", ""), ActionType.DECISION_REFINE, "react_supervisor")
+            ]
+            return updates
 
-    # ─── TriggerAgent ────────────────────────────────────────
+        if name == "ClarificationTool":
+            updates["terminate"] = True
+            updates["messages"] = [
+                make_action_message(args.get("question", ""), ActionType.DECISION_REFINE, "react_supervisor")
+            ]
+            return updates
 
-    if name == "TriggerAgent":
-        mapping = {
-            "spec_writer": ActionType.PRD_READY,
-            "coder": ActionType.CODE_READY,
-            "reviewer": ActionType.REVIEW_READY,
-            "refiner": ActionType.DECISION_REFINE,
-            "tester": ActionType.TEST_COMPLETE,
-            "analyzer": ActionType.ANALYSIS_REGENERATE,
-        }
-
-        updates["messages"] = [
-            make_action_message(
-                f"Supervisor triggered {args['agent']}: {args['objective']}",
-                mapping[args["agent"]],
-                "react_supervisor",
-            )
-        ]
-        return updates
-
-    # ─── EndWorkflow / QuickResponse / ClarificationTool ─────
-
-    if name == "EndWorkflow":
-        updates["messages"] = [
-            make_action_message(args.get("summary", "Workflow complete"), ActionType.DECISION_APPROVED, "react_supervisor")
-        ]
-        updates["terminate"] = True
-        return updates
-
-    if name == "QuickResponse":
-        updates["messages"] = [
-            make_action_message(args.get("response", ""), ActionType.DECISION_REFINE, "react_supervisor")
-        ]
-        updates["terminate"] = True
-        return updates
-
-    if name == "ClarificationTool":
-        updates["messages"] = [
-            make_action_message(args.get("question", ""), ActionType.DECISION_REFINE, "react_supervisor")
-        ]
-        updates["terminate"] = True
-        return updates
+    except ValidationError:
+        emit_event(task_id, {"type": "tool_validation_error", "tool": name})
+        return {"terminate": True}
 
     return updates
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # ROUTER
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 def react_supervisor_router(state: AgentState):
     from langgraph.graph import END
