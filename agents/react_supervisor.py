@@ -3,9 +3,9 @@ Pure ReAct Supervisor (Stable Intent-Gated Version)
 
 Flow:
 1. Classify intent (once, structured).
-2. QUICK → direct response.
+2. QUICK_TASK → direct response.
 3. AMBIGUOUS → clarification.
-4. TASK → ReAct loop.
+4. LONG_TASK → ReAct loop.
 5. Convergence + spam protection enabled.
 """
 
@@ -70,7 +70,7 @@ def ensure_plan_object(obj):
 # ─────────────────────────────────────────────
 
 class IntentTool(BaseModel):
-    intent: Literal["QUICK", "TASK", "AMBIGUOUS"]
+    intent: Literal["QUICK_TASK", "CONVERSATION", "LONG_TASK", "AMBIGUOUS"]
 
 
 def classify_intent(requirement: str, state: AgentState, task_id: str) -> str:
@@ -83,7 +83,7 @@ def classify_intent(requirement: str, state: AgentState, task_id: str) -> str:
     response = llm.invoke(
         f"""Classify the user request.
 
-Return QUICK, TASK, or AMBIGUOUS.
+Return QUICK_TASK, CONVERSATION, LONG_TASK, or AMBIGUOUS.
 
 User:
 {requirement}
@@ -92,13 +92,13 @@ User:
 
     if not getattr(response, "tool_calls", []):
         emit_event(task_id, {"type": "intent_error", "message": "No tool call from intent classifier."})
-        return "TASK"
+        return "LONG_TASK"
 
     try:
         return response.tool_calls[0]["args"]["intent"]
     except Exception:
         emit_event(task_id, {"type": "intent_error", "message": "Malformed intent tool call."})
-        return "TASK"
+        return "LONG_TASK"
 
 
 # ─────────────────────────────────────────────
@@ -171,31 +171,43 @@ def react_supervisor_node(state: AgentState) -> dict:
         emit_event(task_id, {"type": "log", "message": f"Intent: {intent}"})
         return {"intent": intent}
 
-    if intent == "QUICK":
+    if intent == "QUICK_TASK":
         return {
             "terminate": True,
-            "messages": [
-                make_action_message(
-                    requirement,
-                    ActionType.DECISION_REFINE,
-                    "react_supervisor"
-                )
-            ]
+            # "messages": [
+            #     make_action_message(
+            #         requirement,
+            #         ActionType.DECISION_REFINE,
+            #         "react_supervisor"
+            #     )
+            # ]
         }
 
     if intent == "AMBIGUOUS":
         return {
             "terminate": True,
-            "messages": [
-                make_action_message(
-                    "Please clarify your request.",
-                    ActionType.DECISION_REFINE,
-                    "react_supervisor"
-                )
-            ]
+            # "messages": [
+            #     make_action_message(
+            #         "Please clarify your request.",
+            #         ActionType.DECISION_REFINE,
+            #         "react_supervisor"
+            #     )
+            # ]
         }
 
-    # ─── TASK → REACT LOOP ───────────────────
+    if intent == "CONVERSATION":
+        return {
+            "terminate": True,
+            # "messages": [
+            #     make_action_message(
+            #         requirement,
+            #         ActionType.DECISION_REFINE,
+            #         "react_supervisor"
+            #     )
+            # ]
+        }
+
+    # ─── LONG_TASK → REACT LOOP ───────────────────
 
     react_plan = ensure_plan_object(state.get("react_plan_obj"))
     events = state.get("events", [])
@@ -227,6 +239,8 @@ def react_supervisor_node(state: AgentState) -> dict:
     tool_call = response.tool_calls[0]
     name = tool_call["name"]
     args = tool_call["args"]
+
+    emit_event(task_id, {"type": "tool_call", "name": name, "args": args})
 
     # ─── CONVERGENCE PROTECTION ──────────────
 
