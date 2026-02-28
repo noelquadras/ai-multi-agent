@@ -84,6 +84,7 @@ def run_software_crew(
     graph = create_agent_graph()
 
     initial_state: AgentState = {
+        "intent": None,
         "requirements": requirements,
         "task_id": task_id,
         "model": model,

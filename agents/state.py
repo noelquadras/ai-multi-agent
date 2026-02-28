@@ -95,6 +95,9 @@ class AgentState(TypedDict):
     Shared state across all agent nodes in the graph.
     Converted to Event-Sourced model for coordination.
     """
+    # ── Intent (set once by supervisor) ──────────────────────────────────
+    intent: Optional[str]
+
     # ── Input (Static) ──────────────────────────────────────────────────
     requirements: str
     task_id: str
