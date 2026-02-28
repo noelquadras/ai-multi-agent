@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { AgentPanel } from "@/components/workspace/AgentPanel";
+
 import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
 import { CLIPanel } from "@/components/workspace/CLIPanel";
@@ -23,7 +23,6 @@ import {
   X,
   Terminal,
   FileText,
-  History,
   Activity,
   StopCircle,
 } from "lucide-react";
@@ -365,12 +364,9 @@ function WorkspaceContent() {
 
   return (
     <SidebarProvider>
-      <HistorySidebar />
+      <HistorySidebar agents={agents} />
       <SidebarInset>
         <div className="flex h-screen bg-background overflow-hidden">
-          <div className="hidden md:block flex-none">
-            <AgentPanel agents={agents} />
-          </div>
 
           <div className="flex flex-1 flex-col overflow-hidden">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
