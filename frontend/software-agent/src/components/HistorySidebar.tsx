@@ -170,7 +170,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
   };
 
   return (
-    <Sidebar side="left" variant="inset" collapsible="icon">
+    <Sidebar side="left" variant="sidebar" collapsible="offcanvas">
       {/* ── Header ── */}
       <SidebarHeader className="border-b border-border px-3 py-3">
         <SidebarMenu>
