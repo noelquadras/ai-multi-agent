@@ -146,6 +146,12 @@ class AgentState(TypedDict):
     
     # ── ReAct Supervisor State ────────────────────────────────────────
     react_plan: list[dict]
+    react_plan_obj: Any
+    working_memory: str
+    artifact_registry: dict
+    decision_trace: list[str]
+    budget: dict
+    last_failure_type: str
     terminate: bool
 
     # ── Derived Helper (Used for shorthand if needed, but Event remains source of truth) ──
