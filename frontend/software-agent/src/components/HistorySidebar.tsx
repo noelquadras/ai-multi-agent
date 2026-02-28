@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
+import { useTheme } from "@/hooks/useTheme";
 import {
   Loader2,
   Trash2,
@@ -19,9 +21,17 @@ import {
   Terminal,
   FileText,
   Bug,
+  Sun,
+  Moon,
+  LogIn,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { UserMenu } from "@/components/auth/UserMenu";
 import {
   Sidebar,
   SidebarContent,
@@ -34,6 +44,7 @@ import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
   useSidebar,
 } from "@/components/ui/sidebar";
 
@@ -90,19 +101,6 @@ function getRelativeTime(dateString: string): string {
   return `${Math.floor(diffDays / 7)}w ago`;
 }
 
-function getStatusDot(status: SidebarAgent["status"]) {
-  switch (status) {
-    case "thinking":
-      return "bg-blue-500 animate-pulse";
-    case "approved":
-      return "bg-green-500";
-    case "error":
-      return "bg-red-500";
-    default:
-      return "bg-zinc-600";
-  }
-}
-
 function getStatusIcon(status: SidebarAgent["status"]) {
   switch (status) {
     case "thinking":
@@ -116,32 +114,20 @@ function getStatusIcon(status: SidebarAgent["status"]) {
   }
 }
 
-function getTaskStatusColor(status: TaskHistoryItem["status"]) {
-  switch (status) {
-    case "running":
-      return "text-blue-500 bg-blue-500/10 border-blue-500/20";
-    case "completed":
-      return "text-green-500 bg-green-500/10 border-green-500/20";
-    case "paused":
-      return "text-yellow-500 bg-yellow-500/10 border-yellow-500/20";
-    case "failed":
-      return "text-red-500 bg-red-500/10 border-red-500/20";
-    default:
-      return "text-muted-foreground bg-muted border-border";
-  }
-}
-
 /* =========================
    COMPONENT
 ========================= */
 
 interface HistorySidebarProps {
   agents?: SidebarAgent[];
+  apiStatus?: "checking" | "online" | "offline";
 }
 
-export function HistorySidebar({ agents }: HistorySidebarProps) {
+export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
   const router = useRouter();
   const { open, setOpen, isMobile } = useSidebar();
+  const { data: session, status: sessionStatus } = useSession();
+  const { toggleTheme } = useTheme();
   const [history, setHistory] = useState<TaskHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -280,17 +266,15 @@ export function HistorySidebar({ agents }: HistorySidebarProps) {
             </SidebarGroupContent>
           </SidebarGroup>
         )}
-      </SidebarContent>
 
-      {/* ── History Footer ── */}
-      <SidebarFooter className="border-t border-border">
+        {/* ── History ── */}
         <SidebarGroup>
           <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
             <History className="w-3 h-3 mr-1" />
             History
           </SidebarGroupLabel>
           <SidebarGroupContent>
-            <ScrollArea className="max-h-[240px]">
+            <ScrollArea className="max-h-[280px]">
               <SidebarMenu>
                 {loading ? (
                   <div className="flex justify-center py-4">
@@ -347,6 +331,79 @@ export function HistorySidebar({ agents }: HistorySidebarProps) {
             </ScrollArea>
           </SidebarGroupContent>
         </SidebarGroup>
+      </SidebarContent>
+
+      {/* ── Footer: API Status + Theme + Auth ── */}
+      <SidebarFooter className="border-t border-border">
+        <SidebarMenu>
+          {/* API Status */}
+          {apiStatus && (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip={`API ${apiStatus}`}
+                className="h-8 cursor-default"
+              >
+                {apiStatus === "online" ? (
+                  <Wifi className="w-4 h-4 text-green-500 shrink-0" />
+                ) : apiStatus === "offline" ? (
+                  <WifiOff className="w-4 h-4 text-red-500 shrink-0" />
+                ) : (
+                  <Loader2 className="w-4 h-4 text-yellow-500 animate-spin shrink-0" />
+                )}
+                <span
+                  className={cn(
+                    "text-xs font-medium",
+                    apiStatus === "online" && "text-green-500",
+                    apiStatus === "offline" && "text-red-500",
+                    apiStatus === "checking" && "text-yellow-500"
+                  )}
+                >
+                  {apiStatus === "online"
+                    ? "API Online"
+                    : apiStatus === "offline"
+                      ? "API Offline"
+                      : "Checking..."}
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
+
+          {/* Theme Toggle */}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Toggle theme"
+              onClick={toggleTheme}
+              className="h-8"
+            >
+              <Sun className="w-4 h-4 dark:hidden shrink-0" />
+              <Moon className="w-4 h-4 hidden dark:block shrink-0" />
+              <span className="text-xs">
+                <span className="dark:hidden">Light Mode</span>
+                <span className="hidden dark:inline">Dark Mode</span>
+              </span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+
+          <SidebarSeparator />
+
+          {/* User / Auth */}
+          <SidebarMenuItem>
+            {sessionStatus === "authenticated" ? (
+              <div className="px-2 py-1 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
+                <UserMenu />
+              </div>
+            ) : sessionStatus === "unauthenticated" ? (
+              <SidebarMenuButton
+                tooltip="Sign In"
+                onClick={() => router.push("/auth/signin")}
+                className="h-8"
+              >
+                <LogIn className="w-4 h-4 shrink-0" />
+                <span className="text-xs">Sign In</span>
+              </SidebarMenuButton>
+            ) : null}
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   );
