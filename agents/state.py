@@ -156,6 +156,7 @@ class AgentState(TypedDict):
     budget: dict
     last_failure_type: str
     terminate: bool
+    quick_task_done: bool
 
     # ── Derived Helper (Used for shorthand if needed, but Event remains source of truth) ──
     # If using these, ensures they are updated ONLY by the Manager/Supervisor.

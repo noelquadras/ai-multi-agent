@@ -172,40 +172,110 @@ def react_supervisor_node(state: AgentState) -> dict:
         return {"intent": intent}
 
     if intent == "QUICK_TASK":
+        # After the coder finishes, control returns here — terminate.
+        if state.get("quick_task_done"):
+            emit_event(task_id, {"type": "log", "message": "Quick task complete."})
+            return {"terminate": True}
+
+        # First pass: route directly to the coder, skip the full ReAct loop.
+        emit_event(task_id, {"type": "log", "message": "Quick task — sending directly to coder."})
         return {
-            "terminate": True,
-            # "messages": [
-            #     make_action_message(
-            #         requirement,
-            #         ActionType.DECISION_REFINE,
-            #         "react_supervisor"
-            #     )
-            # ]
+            "quick_task_done": True,
+            "messages": [
+                make_action_message(
+                    f"Quick task: {requirement}",
+                    ActionType.CODE_READY,
+                    "react_supervisor",
+                )
+            ],
         }
 
     if intent == "AMBIGUOUS":
-        return {
-            "terminate": True,
-            # "messages": [
-            #     make_action_message(
-            #         "Please clarify your request.",
-            #         ActionType.DECISION_REFINE,
-            #         "react_supervisor"
-            #     )
-            # ]
-        }
+        # ── Generate a clarification question via LLM ──────────
+        clarify_llm = get_llm(
+            for_heavy_task=False,
+            override_model=state.get("agent_models", {}).get("supervisor", ""),
+            base_model=state.get("model", "ollama"),
+        )
+        clarify_resp = clarify_llm.invoke(
+            f"The following user request is ambiguous. "
+            f"Write a short, friendly clarification question (1-2 sentences) "
+            f"to help understand what they need.\n\nUser request:\n{requirement}"
+        )
+        question = getattr(clarify_resp, "content", "Could you please clarify your request?")
+
+        emit_event(task_id, {
+            "type": "clarification",
+            "message": question,
+        })
+
+        # ── Poll for a human response ──────────────────────────
+        import time
+        max_wait = 120          # seconds
+        poll_interval = 3       # seconds
+        waited = 0
+
+        while waited < max_wait:
+            check_interrupts(task_id)
+            human_msgs = get_human_messages(task_id, mark_consumed=True)
+            if human_msgs:
+                user_reply = human_msgs[-1]["message"]
+                emit_event(task_id, {"type": "log", "message": f"Received clarification: {user_reply}"})
+                # Enrich the requirement and re-classify
+                return {
+                    "requirements": f"{requirement}\n\nUser clarification: {user_reply}",
+                    "intent": None,     # reset so we re-classify
+                }
+            time.sleep(poll_interval)
+            waited += poll_interval
+
+        # Timeout — no response received
+        emit_event(task_id, {"type": "log", "message": "No clarification received — ending."})
+        return {"terminate": True}
 
     if intent == "CONVERSATION":
-        return {
-            "terminate": True,
-            # "messages": [
-            #     make_action_message(
-            #         requirement,
-            #         ActionType.DECISION_REFINE,
-            #         "react_supervisor"
-            #     )
-            # ]
-        }
+        # ── Generate a conversational reply ────────────────────
+        chat_llm = get_llm(
+            for_heavy_task=False,
+            override_model=state.get("agent_models", {}).get("supervisor", ""),
+            base_model=state.get("model", "ollama"),
+        )
+        chat_resp = chat_llm.invoke(
+            f"You are a helpful AI assistant. Have a natural conversation "
+            f"with the user. Keep your reply concise and friendly.\n\n"
+            f"User:\n{requirement}"
+        )
+        reply = getattr(chat_resp, "content", "I'm here to help! Could you tell me more?")
+
+        emit_event(task_id, {
+            "type": "conversation",
+            "message": reply,
+        })
+
+        # ── Wait for the human to continue the conversation ───
+        import time
+        max_wait = 120          # seconds
+        poll_interval = 3       # seconds
+        waited = 0
+
+        while waited < max_wait:
+            check_interrupts(task_id)
+            human_msgs = get_human_messages(task_id, mark_consumed=True)
+            if human_msgs:
+                user_reply = human_msgs[-1]["message"]
+                emit_event(task_id, {"type": "log", "message": f"User said: {user_reply}"})
+                # Update context and re-classify — if the user pivots
+                # to a coding task the classifier will catch it.
+                return {
+                    "requirements": f"{requirement}\n\nAssistant: {reply}\n\nUser: {user_reply}",
+                    "intent": None,     # re-classify on next pass
+                }
+            time.sleep(poll_interval)
+            waited += poll_interval
+
+        # Timeout — conversation ended naturally
+        emit_event(task_id, {"type": "log", "message": "Conversation timed out — ending."})
+        return {"terminate": True}
 
     # ─── LONG_TASK → REACT LOOP ───────────────────
 

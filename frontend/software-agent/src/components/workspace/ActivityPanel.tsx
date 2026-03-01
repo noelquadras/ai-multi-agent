@@ -61,7 +61,9 @@ export type TaskEvent =
   | { type: "task_resumed"; message: string; timestamp: string }
   | { type: "human_approval"; approved: boolean; message: string; timestamp: string }
   | { type: "human_message"; message: string; timestamp: string }
-  | { type: "task_cancelled"; message: string; timestamp: string };
+  | { type: "task_cancelled"; message: string; timestamp: string }
+  | { type: "conversation"; message: string; timestamp: string }
+  | { type: "clarification"; message: string; timestamp: string };
 
 interface ActivityPanelProps {
   events?: TaskEvent[];
@@ -347,6 +349,18 @@ function EventRow({ event }: { event: TaskEvent }) {
       color = "text-orange-500";
       icon = <StopCircle className="w-3 h-3" />;
       message = event.message || "Task cancelled by user";
+      break;
+
+    case "conversation":
+      color = "text-violet-400";
+      label = "Supervisor";
+      message = event.message;
+      break;
+
+    case "clarification":
+      color = "text-amber-400";
+      label = "Supervisor";
+      message = `❓ ${event.message}`;
       break;
   }
 

@@ -25,6 +25,7 @@ import {
     Pause,
     Play,
     StopCircle,
+    HelpCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TaskEvent } from "@/components/workspace/ActivityPanel";
@@ -54,191 +55,177 @@ interface ChatPanelProps {
 }
 
 /* =========================
-   EVENT → CHAT MESSAGE
+   EVENT CONFIG MAP
 ========================= */
 
+type EventConfig = {
+    role: ChatMessage["role"];
+    icon: React.ReactNode;
+    color: string;
+    content: (event: any) => string;
+    agent?: (event: any) => string | undefined;
+};
+
+const EVENT_CONFIG: Record<string, EventConfig> = {
+    agent_start: {
+        role: "assistant",
+        icon: <Sparkles className="w-3 h-3 text-blue-400" />,
+        color: "text-blue-400",
+        content: () => "started working",
+        agent: (e) => e.agent,
+    },
+    agent_end: {
+        role: "assistant",
+        icon: <CheckCircle className="w-3 h-3 text-green-400" />,
+        color: "text-green-400",
+        content: () => "completed task",
+        agent: (e) => e.agent,
+    },
+    tool_call: {
+        role: "assistant",
+        icon: <Wrench className="w-3 h-3 text-purple-400" />,
+        color: "text-purple-400",
+        content: (e) => e.args?.task ? `${e.args.task}` : `${e.args?.agent} - ${e.args?.objective}`,
+        agent: (e) => e.name,
+    },
+    tool_error: {
+        role: "assistant",
+        icon: <AlertCircle className="w-3 h-3 text-red-400" />,
+        color: "text-red-400",
+        content: (e) => `⚠️ ${e.tool}: ${e.error}`,
+        agent: (e) => e.agent,
+    },
+    system_error: {
+        role: "system",
+        icon: <AlertCircle className="w-3 h-3 text-red-500" />,
+        color: "text-red-500",
+        content: (e) => `Error: ${e.error}`,
+    },
+    code_output: {
+        role: "assistant",
+        icon: <FileCode className="w-3 h-3 text-emerald-400" />,
+        color: "text-emerald-400",
+        content: (e) => `Generated code output:\n\`\`\`\n${e.code?.length > 200 ? e.code.slice(0, 200) + "\n..." : e.code}\n\`\`\``,
+        agent: (e) => e.agent,
+    },
+    review_output: {
+        role: "assistant",
+        icon: <FileText className="w-3 h-3 text-yellow-400" />,
+        color: "text-yellow-400",
+        content: (e) => e.review,
+        agent: (e) => e.agent,
+    },
+    decision_output: {
+        role: "assistant",
+        icon: <CheckCircle className="w-3 h-3 text-purple-400" />,
+        color: "text-purple-400",
+        content: (e) => `Decision: ${e.decision}`,
+        agent: (e) => e.agent,
+    },
+    doc_output: {
+        role: "assistant",
+        icon: <FileText className="w-3 h-3 text-blue-400" />,
+        color: "text-blue-400",
+        content: (e) => e.documentation?.length > 300 ? e.documentation.slice(0, 300) + "\n..." : e.documentation,
+        agent: (e) => e.agent,
+    },
+    test_output: {
+        role: "assistant",
+        icon: <TestTube className="w-3 h-3 text-cyan-400" />,
+        color: "text-cyan-400",
+        content: (e) => `Test results:\n${e.results}`,
+        agent: (e) => e.agent,
+    },
+    cli_output: {
+        role: "assistant",
+        icon: <Terminal className="w-3 h-3 text-green-400" />,
+        color: "text-green-400",
+        content: (e) => e.message,
+        agent: () => "CLI",
+    },
+    task_completed: {
+        role: "system",
+        icon: <CheckCircle className="w-3 h-3 text-green-500" />,
+        color: "text-green-500",
+        content: () => "✅ Task completed successfully!",
+    },
+    task_paused: {
+        role: "system",
+        icon: <Pause className="w-3 h-3 text-yellow-500" />,
+        color: "text-yellow-500",
+        content: (e) => `⏸️ ${e.message}`,
+    },
+    task_resumed: {
+        role: "system",
+        icon: <Play className="w-3 h-3 text-green-500" />,
+        color: "text-green-500",
+        content: (e) => `▶️ ${e.message}`,
+    },
+    human_approval: {
+        role: "user",
+        icon: <CheckCircle className="w-3 h-3 text-green-500" />,
+        color: "text-green-500",
+        content: (e) => e.message,
+    },
+    task_cancelled: {
+        role: "system",
+        icon: <StopCircle className="w-3 h-3 text-orange-500" />,
+        color: "text-orange-500",
+        content: (e) => `🛑 ${e.message || "Task cancelled by user"}`,
+    },
+    human_message: {
+        role: "user",
+        icon: <User className="w-3 h-3 text-blue-400" />,
+        color: "text-blue-400",
+        content: (e) => e.message,
+    },
+    conversation: {
+        role: "assistant",
+        icon: <MessageSquare className="w-3 h-3 text-violet-400" />,
+        color: "text-violet-400",
+        content: (e) => e.message,
+        agent: () => "Supervisor",
+    },
+    clarification: {
+        role: "assistant",
+        icon: <HelpCircle className="w-3 h-3 text-amber-400" />,
+        color: "text-amber-400",
+        content: (e) => `❓ ${e.message}`,
+        agent: () => "Supervisor",
+    },
+};
+
 function eventToChatMessage(event: TaskEvent, index: number): ChatMessage | null {
-    const base = {
+    if (event.type === "log") return null;
+
+    const config = EVENT_CONFIG[event.type];
+    if (!config) return null;
+
+    // Special handling for human_approval icon/color
+    if (event.type === "human_approval") {
+        return {
+            id: `evt_${index}_${event.timestamp}`,
+            timestamp: event.timestamp,
+            status: "complete",
+            role: config.role,
+            content: config.content(event),
+            icon: event.approved
+                ? <CheckCircle className="w-3 h-3 text-green-500" />
+                : <XCircle className="w-3 h-3 text-red-500" />,
+            color: event.approved ? "text-green-500" : "text-red-500",
+        };
+    }
+
+    return {
         id: `evt_${index}_${event.timestamp}`,
         timestamp: event.timestamp,
-        status: "complete" as const,
+        status: "complete",
+        role: config.role,
+        content: config.content(event),
+        icon: config.icon,
+        color: config.color,
+        agent: config.agent?.(event),
     };
-
-    switch (event.type) {
-        case "agent_start":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.agent,
-                content: `started working`,
-                icon: <Sparkles className="w-3 h-3 text-blue-400" />,
-                color: "text-blue-400",
-            };
-
-        case "agent_end":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.agent,
-                content: `completed task`,
-                icon: <CheckCircle className="w-3 h-3 text-green-400" />,
-                color: "text-green-400",
-            };
-
-        case "tool_call":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.name,
-                content: event.args.task ? `${event.args.task}` : `${event.args.agent} - ${event.args.objective}`,
-                icon: <Wrench className="w-3 h-3 text-purple-400" />,
-                color: "text-purple-400",
-            };
-
-        case "tool_error":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.agent,
-                content: `⚠️ ${event.tool}: ${event.error}`,
-                icon: <AlertCircle className="w-3 h-3 text-red-400" />,
-                color: "text-red-400",
-            };
-
-        case "system_error":
-            return {
-                ...base,
-                role: "system",
-                content: `Error: ${event.error}`,
-                icon: <AlertCircle className="w-3 h-3 text-red-500" />,
-                color: "text-red-500",
-            };
-
-        case "code_output":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.agent,
-                content: `Generated code output:\n\`\`\`\n${event.code.length > 200 ? event.code.slice(0, 200) + "\n..." : event.code}\n\`\`\``,
-                icon: <FileCode className="w-3 h-3 text-emerald-400" />,
-                color: "text-emerald-400",
-            };
-
-        case "review_output":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.agent,
-                content: event.review,
-                icon: <FileText className="w-3 h-3 text-yellow-400" />,
-                color: "text-yellow-400",
-            };
-
-        case "decision_output":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.agent,
-                content: `Decision: ${event.decision}`,
-                icon: <CheckCircle className="w-3 h-3 text-purple-400" />,
-                color: "text-purple-400",
-            };
-
-        case "doc_output":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.agent,
-                content: event.documentation.length > 300
-                    ? event.documentation.slice(0, 300) + "\n..."
-                    : event.documentation,
-                icon: <FileText className="w-3 h-3 text-blue-400" />,
-                color: "text-blue-400",
-            };
-
-        case "test_output":
-            return {
-                ...base,
-                role: "assistant",
-                agent: event.agent,
-                content: `Test results:\n${event.results}`,
-                icon: <TestTube className="w-3 h-3 text-cyan-400" />,
-                color: "text-cyan-400",
-            };
-
-        case "cli_output":
-            return {
-                ...base,
-                role: "assistant",
-                agent: "CLI",
-                content: event.message,
-                icon: <Terminal className="w-3 h-3 text-green-400" />,
-                color: "text-green-400",
-            };
-
-        case "task_completed":
-            return {
-                ...base,
-                role: "system",
-                content: "✅ Task completed successfully!",
-                icon: <CheckCircle className="w-3 h-3 text-green-500" />,
-                color: "text-green-500",
-            };
-
-        case "task_paused":
-            return {
-                ...base,
-                role: "system",
-                content: `⏸️ ${event.message}`,
-                icon: <Pause className="w-3 h-3 text-yellow-500" />,
-                color: "text-yellow-500",
-            };
-
-        case "task_resumed":
-            return {
-                ...base,
-                role: "system",
-                content: `▶️ ${event.message}`,
-                icon: <Play className="w-3 h-3 text-green-500" />,
-                color: "text-green-500",
-            };
-
-        case "human_approval":
-            return {
-                ...base,
-                role: "user",
-                content: event.message,
-                icon: event.approved
-                    ? <CheckCircle className="w-3 h-3 text-green-500" />
-                    : <XCircle className="w-3 h-3 text-red-500" />,
-                color: event.approved ? "text-green-500" : "text-red-500",
-            };
-
-        case "task_cancelled":
-            return {
-                ...base,
-                role: "system",
-                content: `🛑 ${event.message || "Task cancelled by user"}`,
-                icon: <StopCircle className="w-3 h-3 text-orange-500" />,
-                color: "text-orange-500",
-            };
-
-        case "human_message":
-            return {
-                ...base,
-                role: "user",
-                content: event.message,
-                icon: <User className="w-3 h-3 text-blue-400" />,
-                color: "text-blue-400",
-            };
-
-        case "log":
-            // Skip generic log messages to reduce noise — they're visible in the Activity panel
-            return null;
-
-        default:
-            return null;
-    }
 }
 
 /* =========================
