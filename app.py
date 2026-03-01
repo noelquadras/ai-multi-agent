@@ -523,6 +523,30 @@ async def get_artifact_content(task_id: str, artifact_path: str):
         raise HTTPException(status_code=404, detail="Artifact not found")
     return {"task_id": task_id, "path": artifact_path, "content": content}
 
+
+@app.get("/api/task/{task_id}/code-versions")
+async def get_code_versions(task_id: str):
+    """Return all versioned code files for a task."""
+    from pathlib import Path
+    code_dir = Path("tasks") / task_id / "code"
+    if not code_dir.exists():
+        return {"task_id": task_id, "files": []}
+
+    files = []
+    for f in sorted(code_dir.glob("solution_v*.py")):
+        files.append({
+            "filename": f.name,
+            "content": f.read_text(encoding="utf-8"),
+        })
+    # Also include legacy solution.py if it exists
+    legacy = code_dir / "solution.py"
+    if legacy.exists():
+        files.insert(0, {
+            "filename": "solution.py",
+            "content": legacy.read_text(encoding="utf-8"),
+        })
+    return {"task_id": task_id, "files": files}
+
 @app.get("/api/models")
 async def get_available_models():
     # 1. Fetch local Ollama models

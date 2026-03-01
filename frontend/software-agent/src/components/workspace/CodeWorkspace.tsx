@@ -13,71 +13,68 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+interface CodeFile {
+  filename: string;
+  content: string;
+}
 
 interface CodeWorkspaceProps {
   code?: string;
   isReadOnly?: boolean;
-  fileStructure?: Record<string, string>;
+  codeFiles?: CodeFile[];
   onCopyCode?: (code: string) => void;
 }
 
 export function CodeWorkspace({
   code = "",
   isReadOnly = false,
-  fileStructure,
+  codeFiles = [],
   onCopyCode,
 }: CodeWorkspaceProps) {
-  const [activeFile, setActiveFile] = useState<string>("code.py");
-  const [files, setFiles] = useState<Record<string, string>>({});
+  const [activeFile, setActiveFile] = useState<string>("");
   const [copied, setCopied] = useState(false);
 
-
-
+  // When codeFiles change, auto-select the latest version
   useEffect(() => {
-    // Initialize files from props
-    if (fileStructure) {
-      setFiles(fileStructure);
-      const firstFile = Object.keys(fileStructure)[0];
-      if (firstFile) {
-        setActiveFile(firstFile);
-      }
+    if (codeFiles.length > 0) {
+      const latest = codeFiles[codeFiles.length - 1];
+      setActiveFile(latest.filename);
     } else if (code) {
-      // If only code is provided, create a single file
-      setFiles({
-        "code.py": code,
-      });
       setActiveFile("code.py");
-    } else {
-      // Default empty files
-      setFiles({
-        "code.py":
-          "# No code generated yet\n# Run the AI crew to generate code",
-        "requirements.txt": "# Dependencies will be listed here",
-        "README.md": "# Project documentation will appear here",
-      });
     }
-  }, [code, fileStructure]);
+  }, [codeFiles, code]);
+
+  // Build the display list: either codeFiles or fallback to code prop
+  const displayFiles: CodeFile[] =
+    codeFiles.length > 0
+      ? codeFiles
+      : code
+        ? [{ filename: "code.py", content: code }]
+        : [];
+
+  const activeContent =
+    displayFiles.find((f) => f.filename === activeFile)?.content || "";
 
   const handleCopyCode = () => {
-    const currentCode = files[activeFile];
-    navigator.clipboard.writeText(currentCode);
+    navigator.clipboard.writeText(activeContent);
     if (onCopyCode) {
-      onCopyCode(currentCode);
+      onCopyCode(activeContent);
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleRunCode = async () => {
+    const runFilename = activeFile || "code.py";
     let command = "";
-    if (activeFile.endsWith(".py")) {
-      command = `python -u ${activeFile}`;
-    } else if (activeFile.endsWith(".js")) {
-      command = `node ${activeFile}`;
-    } else if (activeFile.endsWith(".ts") || activeFile.endsWith(".tsx")) {
-      command = `npx ts-node ${activeFile}`;
+    if (runFilename.endsWith(".py")) {
+      command = `python -u ${runFilename}`;
+    } else if (runFilename.endsWith(".js")) {
+      command = `node ${runFilename}`;
+    } else if (runFilename.endsWith(".ts") || runFilename.endsWith(".tsx")) {
+      command = `npx ts-node ${runFilename}`;
     } else {
-      return; // file type not supported for direct run
+      return;
     }
 
     try {
@@ -86,16 +83,14 @@ export function CodeWorkspace({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           command,
-          save_code: files[activeFile],
-          filename: activeFile,
+          save_code: activeContent,
+          filename: runFilename,
         }),
       });
     } catch (e) {
       console.error("Failed to run code:", e);
     }
   };
-
-
 
   const getFileIcon = (fileName: string) => {
     if (fileName.endsWith(".tsx") || fileName.endsWith(".jsx")) return "⚛";
@@ -116,7 +111,7 @@ export function CodeWorkspace({
     return "text-zinc-400";
   };
 
-  if (!code && Object.keys(files).length === 0) {
+  if (displayFiles.length === 0) {
     return (
       <Card className="h-full border-none rounded-none border-r border-border bg-card flex flex-col">
         <CardHeader className="p-4 border-b border-border bg-card">
@@ -154,29 +149,29 @@ export function CodeWorkspace({
       <CardHeader className="p-0 border-b border-border bg-card flex flex-row items-center justify-between h-[3.2rem]">
         {/* File Tabs */}
         <div className="flex h-full overflow-x-auto scrollbar-thin">
-          {Object.keys(files).map((fileName) => (
+          {displayFiles.map((file) => (
             <button
-              key={fileName}
-              onClick={() => setActiveFile(fileName)}
+              key={file.filename}
+              onClick={() => setActiveFile(file.filename)}
               className={`
                     px-4 text-sm border-r border-border flex items-center gap-2 h-full transition-colors font-medium whitespace-nowrap
-                    ${activeFile === fileName
+                    ${activeFile === file.filename
                   ? "bg-muted text-foreground border-t-2 border-t-blue-500"
                   : "bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
                 }
                   `}
             >
-              <span className={getFileColor(fileName)}>
-                {getFileIcon(fileName)}
+              <span className={getFileColor(file.filename)}>
+                {getFileIcon(file.filename)}
               </span>
-              {fileName}
+              {file.filename}
             </button>
           ))}
         </div>
 
         {/* Status / Label */}
         <div className="px-4 flex items-center gap-3">
-          {files[activeFile] && files[activeFile].length > 0 && (
+          {activeContent && activeContent.length > 0 && (
             <>
               <Button
                 variant="ghost"
@@ -213,7 +208,7 @@ export function CodeWorkspace({
       <CardContent className="flex-1 p-0 overflow-hidden">
         <div className="h-full overflow-auto bg-muted text-sm font-mono">
           <div className="min-w-fit">
-            {(files[activeFile] || "# File is empty").split("\n").map((line, i) => (
+            {(activeContent || "# File is empty").split("\n").map((line, i) => (
               <div key={i} className="flex hover:bg-muted-foreground/5">
                 <div className="shrink-0 w-12 bg-muted border-r border-border text-right pr-3 select-none sticky left-0 text-muted-foreground z-10 h-auto">
                   {i + 1}
@@ -231,3 +226,4 @@ export function CodeWorkspace({
     </Card>
   );
 }
+

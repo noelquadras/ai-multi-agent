@@ -366,7 +366,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                     )}
                 >
                     {/* Message content – respects newlines */}
-                    <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                    <p className="whitespace-pre-wrap break-words text-xs">{message.content}</p>
 
                     {/* Status indicator for streaming */}
                     {message.status === "streaming" && (

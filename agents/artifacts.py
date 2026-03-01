@@ -10,6 +10,7 @@ Inspired by: MetaGPT FileRepository + AutoGen save_state/load_state.
 
 from pathlib import Path
 import json
+import re
 from typing import Optional
 
 TASKS_ROOT = Path("tasks")
@@ -28,6 +29,28 @@ def save_artifact(task_id: str, relative_path: str, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def save_code_version(task_id: str, content: str) -> tuple[Path, str]:
+    """Save code as the next version: code/solution_v1.py, v2, v3, etc.
+    Returns (path, filename) e.g. (Path(...), 'solution_v3.py').
+    """
+    code_dir = artifact_dir(task_id) / "code"
+    code_dir.mkdir(parents=True, exist_ok=True)
+
+    # Find existing version numbers
+    existing = list(code_dir.glob("solution_v*.py"))
+    max_ver = 0
+    for f in existing:
+        m = re.search(r"solution_v(\d+)\.py$", f.name)
+        if m:
+            max_ver = max(max_ver, int(m.group(1)))
+
+    next_ver = max_ver + 1
+    filename = f"solution_v{next_ver}.py"
+    path = code_dir / filename
+    path.write_text(content, encoding="utf-8")
+    return path, filename
 
 
 def save_json_artifact(task_id: str, relative_path: str, data: dict) -> Path:

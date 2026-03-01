@@ -10,7 +10,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 from agents.state import AgentState
 from agents.spec_schema import SpecOutput
-from agents.artifacts import save_artifact
+from agents.artifacts import save_code_version
 from agents.llm_config import check_interrupts, get_llm, clean_code_output, _trimmed_invoke
 from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event
@@ -106,12 +106,14 @@ def code_generator_node(state: AgentState) -> AgentState:
             
         # 2. Normal code generation complete
         code = response.content
-        save_artifact(state["task_id"], "code/solution.py", clean_code_output(code))
+        clean_code = clean_code_output(code)
+        _, version_filename = save_code_version(state["task_id"], clean_code)
         
         emit_event(state["task_id"], {
             "type": "code_output",
             "agent": "coder",
-            "code": clean_code_output(code)
+            "code": clean_code,
+            "filename": version_filename
         })
         
         # ── Mutate execution_plan IN MAKE (generate) ─────────────────────────

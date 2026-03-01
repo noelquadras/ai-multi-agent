@@ -10,8 +10,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.schemas import ReviewOutput, AnalysisOutput
 from agents.memory import AgentMemory
-from agents.llm_config import check_interrupts, get_llm, _trimmed_invoke
+from agents.llm_config import check_interrupts, get_llm, clean_code_output, _trimmed_invoke
 from agents.action_types import ActionType, subscribe, make_action_message
+from agents.artifacts import save_code_version
 from database import emit_event, get_rejection_feedback, update_rejection_feedback
 
 _code_refiner_prompt = ChatPromptTemplate.from_messages([
@@ -149,6 +150,8 @@ def code_refiner_node(state: AgentState) -> AgentState:
         )
         response = _trimmed_invoke(llm, messages)
         refined_code = response.content
+        clean_refined = clean_code_output(refined_code)
+        _, version_filename = save_code_version(state["task_id"], clean_refined)
         
         emit_event(state["task_id"], {
             "type": "agent_end",
@@ -158,6 +161,14 @@ def code_refiner_node(state: AgentState) -> AgentState:
         emit_event(state["task_id"], {
             "type": "log",
             "message": f"[AGENT_END refiner]"
+        })
+
+        # Emit code_output so frontend picks up the refined version
+        emit_event(state["task_id"], {
+            "type": "code_output",
+            "agent": "refiner",
+            "code": clean_refined,
+            "filename": version_filename
         })
         
         # Build memory entry summarising what was fixed

@@ -57,6 +57,11 @@ interface TaskOutputs {
   testResults: string;
 }
 
+interface CodeFile {
+  filename: string;
+  content: string;
+}
+
 type SidePanel = "cli" | "docs" | "terminal";
 
 /* =========================
@@ -80,6 +85,7 @@ function WorkspaceContent() {
     testResults: "",
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
+  const [codeFiles, setCodeFiles] = useState<CodeFile[]>([]);
   const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli" | "docs">("activity");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
 
@@ -181,6 +187,13 @@ function WorkspaceContent() {
 
     if (event.type === "code_output" && event.code) {
       setOutputs((prev) => ({ ...prev, code: event.code }));
+      // Add the new version to the codeFiles list
+      const filename = (event as any).filename || "code.py";
+      setCodeFiles((prev) => {
+        // Avoid duplicates
+        if (prev.some((f) => f.filename === filename)) return prev;
+        return [...prev, { filename, content: event.code }];
+      });
       setRightActiveTab("activity");
     }
     if (event.type === "review_output" && event.review) {
@@ -260,6 +273,20 @@ function WorkspaceContent() {
       testResults: "",
     });
     setCliLogs([]);
+    setCodeFiles([]);
+
+    // Fetch existing code versions from disk
+    fetch(`http://localhost:8000/api/task/${taskId}/code-versions`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.files && data.files.length > 0) {
+          setCodeFiles(data.files);
+          // Set the latest code as output
+          const latest = data.files[data.files.length - 1];
+          setOutputs((prev) => ({ ...prev, code: latest.content }));
+        }
+      })
+      .catch(() => { });
 
     // Initial fetch to sync with DB
     refreshStatus(taskId);
@@ -468,7 +495,7 @@ function WorkspaceContent() {
               </div>
 
               <div className="flex-1 overflow-hidden">
-                <CodeWorkspace code={outputs.code} isReadOnly />
+                <CodeWorkspace code={outputs.code} codeFiles={codeFiles} isReadOnly />
               </div>
 
               <div className="hidden xl:flex flex-col border-l border-border w-[450px]">
