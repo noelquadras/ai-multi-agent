@@ -39,6 +39,7 @@ export type TaskEvent =
   }
   | { type: "system_error"; error: string; timestamp: string }
   | { type: "log"; message: string; timestamp: string }
+  | { type: "tool_call"; name: any; args: any; timestamp: string }
   | { type: "code_output"; agent: string; code: string; timestamp: string }
   | { type: "review_output"; agent: string; review: string; timestamp: string }
   | {
@@ -212,8 +213,8 @@ function AgentFilterButton({
     <button
       onClick={onClick}
       className={`px-2 py-1 text-[10px] rounded border transition-colors whitespace-nowrap ${active
-          ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
-          : "bg-card text-zinc-500 border-zinc-800 hover:text-zinc-300"
+        ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
+        : "bg-card text-zinc-500 border-zinc-800 hover:text-zinc-300"
         }`}
     >
       {label}

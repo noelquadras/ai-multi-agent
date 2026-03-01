@@ -42,6 +42,7 @@ export interface ChatMessage {
     status?: "sending" | "streaming" | "complete" | "error";
     icon?: React.ReactNode;
     color?: string;
+    name?: string;
 }
 
 interface ChatPanelProps {
@@ -84,12 +85,12 @@ function eventToChatMessage(event: TaskEvent, index: number): ChatMessage | null
                 color: "text-green-400",
             };
 
-        case "tool_start":
+        case "tool_call":
             return {
                 ...base,
                 role: "assistant",
-                agent: event.agent,
-                content: `Using tool: ${event.tool}`,
+                agent: event.name,
+                content: event.args.task ? `${event.args.task}` : `${event.args.agent} - ${event.args.objective}`,
                 icon: <Wrench className="w-3 h-3 text-purple-400" />,
                 color: "text-purple-400",
             };
