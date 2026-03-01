@@ -160,6 +160,55 @@ def _resume_graph(task_id: str):
         cancellation_registry.unregister(task_id)
         sys.stdout = old_stdout
 
+
+def _continue_graph(task_id: str, new_message: str):
+    """
+    Continue a completed/terminated workflow with a new human message.
+
+    Re-invokes the graph from the last checkpoint with reset state
+    so the supervisor re-classifies and routes the new message.
+    """
+    from main import create_agent_graph
+    from agents.cancellation import cancellation_registry
+
+    old_stdout = sys.stdout
+    sys.stdout = QueueLogger(task_id)
+    cancellation_registry.register(task_id)
+
+    try:
+        graph = create_agent_graph()
+        config = {"configurable": {"thread_id": task_id}}
+
+        # Get current state from checkpoint so we preserve context
+        current_state = graph.get_state(config)
+        prev_requirements = current_state.values.get("requirements", "") if current_state else ""
+
+        # Build updated state: reset flags, update requirements with new message
+        updated_state = {
+            "terminate": False,
+            "intent": None,
+            "quick_task_done": False,
+            "requirements": f"{prev_requirements}\n\nUser: {new_message}",
+        }
+
+        graph.invoke(updated_state, config=config)
+
+        update_task_status(task_id, "completed")
+        emit_event(task_id, {"type": "task_completed"})
+    except RuntimeError as e:
+        if "cancelled" in str(e).lower():
+            update_task_status(task_id, "cancelled")
+            emit_event(task_id, {"type": "task_cancelled", "message": str(e)})
+        else:
+            update_task_status(task_id, "failed")
+            emit_event(task_id, {"type": "system_error", "error": str(e)})
+    except Exception as e:
+        update_task_status(task_id, "failed")
+        emit_event(task_id, {"type": "system_error", "error": str(e)})
+    finally:
+        cancellation_registry.unregister(task_id)
+        sys.stdout = old_stdout
+
 # =========================
 # API ROUTES
 # =========================
@@ -456,18 +505,33 @@ class HumanMessageRequest(BaseModel):
 
 @app.post("/api/task/{task_id}/message")
 async def post_human_message(task_id: str, body: HumanMessageRequest):
-    """Receives a human chat message and stores it for the supervisor to pick up."""
+    """Receives a human chat message and stores it for the supervisor to pick up.
+    If the task has already completed, re-enters the workflow."""
     if not body.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
+    trimmed = body.message.strip()
+
     # Persist so the supervisor can read it on the next iteration
-    store_human_message(task_id, body.message.strip())
+    store_human_message(task_id, trimmed)
 
     # Broadcast as an SSE event so the UI confirms delivery
     emit_event(task_id, {
         "type": "human_message",
-        "message": body.message.strip(),
+        "message": trimmed,
     })
+
+    # If the task is completed/failed, re-enter the workflow with the new message
+    task_state = get_task_status(task_id)
+    if task_state and task_state.get("status") in ("completed", "failed"):
+        update_task_status(task_id, "running")
+        emit_event(task_id, {"type": "log", "message": "Continuing workflow with new message."})
+        threading.Thread(
+            target=_continue_graph,
+            args=(task_id, trimmed),
+            daemon=True,
+        ).start()
+        return {"status": "continued"}
 
     return {"status": "sent"}
 
