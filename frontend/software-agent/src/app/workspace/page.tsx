@@ -10,6 +10,7 @@ import { RejectModal } from "@/components/workspace/RejectModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import dynamic from "next/dynamic";
+import { ChatPanel } from "@/components/workspace/ChatPanel";
 
 const TerminalComponent = dynamic(
   () => import("@/components/Terminal").then((mod) => mod.Terminal),
@@ -447,83 +448,96 @@ function WorkspaceContent() {
             </div>
 
             <div className="flex flex-1 overflow-hidden">
+              <div className="w-[350px] border-r border-border shrink-0 flex flex-col overflow-hidden">
+                <ChatPanel
+                  taskId={taskId}
+                  events={events}
+                  onSendMessage={(message) => {
+                    console.log("Sending message:", message);
+                  }}
+                  isLoading={taskStatus === "running"}
+                />
+              </div>
+
               <div className="flex-1 overflow-hidden">
                 <CodeWorkspace code={outputs.code} isReadOnly />
               </div>
 
               <div className="hidden xl:flex flex-col border-l border-border w-[450px]">
-                <div className="flex border-b border-border bg-card">
-                  <button
-                    onClick={() => setRightActiveTab("activity")}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "activity"
-                      ? "bg-muted text-foreground border-b-2 border-purple-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <Activity className="w-3.5 h-3.5" /> Activity
-                  </button>
-                  <button
-                    onClick={() => setRightActiveTab("cli")}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "cli"
-                      ? "bg-muted text-foreground border-b-2 border-green-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <Terminal className="w-3.5 h-3.5" /> CLI Tests
-                    {cliLogs.length > 0 && (
-                      <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setRightActiveTab("docs")}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "docs"
-                      ? "bg-muted text-foreground border-b-2 border-blue-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <FileText className="w-3.5 h-3.5" /> Docs
-                  </button>
-                </div>
-                <div className="flex-1 overflow-hidden relative">
-                  {rightActiveTab === "activity" && (
-                    <ActivityPanel events={events} />
-                  )}
-                  {rightActiveTab === "cli" && (
-                    <div className="absolute inset-0 overflow-hidden">
-                      <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
-                    </div>
-                  )}
-                  {rightActiveTab === "docs" && (
-                    <div className="absolute inset-0 overflow-auto bg-card p-4">
-                      <h3 className="text-sm font-semibold text-foreground mb-4">
-                        Generated Documentation
-                      </h3>
-                      {outputs.documentation ? (
-                        <div className="prose prose-sm max-w-none">
-                          <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
-                            {outputs.documentation}
-                          </pre>
-                        </div>
-                      ) : (
-                        <p className="text-muted-foreground text-xs">
-                          Documentation will appear here once generated.
-                        </p>
+                <div className="flex-1 flex flex-col min-h-0">
+                  <div className="flex border-b border-border bg-card">
+                    <button
+                      onClick={() => setRightActiveTab("activity")}
+                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "activity"
+                        ? "bg-muted text-foreground border-b-2 border-purple-500"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <Activity className="w-3.5 h-3.5" /> Activity
+                    </button>
+                    <button
+                      onClick={() => setRightActiveTab("cli")}
+                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "cli"
+                        ? "bg-muted text-foreground border-b-2 border-green-500"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <Terminal className="w-3.5 h-3.5" /> CLI Tests
+                      {cliLogs.length > 0 && (
+                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
                       )}
+                    </button>
+                    <button
+                      onClick={() => setRightActiveTab("docs")}
+                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "docs"
+                        ? "bg-muted text-foreground border-b-2 border-blue-500"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <FileText className="w-3.5 h-3.5" /> Docs
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-hidden relative">
+                    {rightActiveTab === "activity" && (
+                      <ActivityPanel events={events} />
+                    )}
+                    {rightActiveTab === "cli" && (
+                      <div className="absolute inset-0 overflow-hidden">
+                        <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
+                      </div>
+                    )}
+                    {rightActiveTab === "docs" && (
+                      <div className="absolute inset-0 overflow-auto bg-card p-4">
+                        <h3 className="text-sm font-semibold text-foreground mb-4">
+                          Generated Documentation
+                        </h3>
+                        {outputs.documentation ? (
+                          <div className="prose prose-sm max-w-none">
+                            <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
+                              {outputs.documentation}
+                            </pre>
+                          </div>
+                        ) : (
+                          <p className="text-muted-foreground text-xs">
+                            Documentation will appear here once generated.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="h-72 border-t border-border overflow-hidden flex flex-col shrink-0">
+                  <div className="flex border-b border-border bg-card px-4 py-2">
+                    <div className="flex items-center gap-2 text-sm text-foreground font-medium">
+                      <Terminal className="w-4 h-4" /> Terminal
                     </div>
-                  )}
-                </div>
-              </div>
-            </div>
+                  </div>
 
-            <div className="h-72 border-t border-border overflow-hidden flex flex-col">
-              <div className="flex border-b border-border bg-card px-4 py-2">
-                <div className="flex items-center gap-2 text-sm text-foreground font-medium">
-                  <Terminal className="w-4 h-4" /> Terminal
+                  <div className="flex-1 overflow-hidden bg-[#1a1b26]">
+                    <TerminalComponent className="h-full w-full" />
+                  </div>
                 </div>
-              </div>
-
-              <div className="flex-1 overflow-hidden bg-[#1a1b26]">
-                <TerminalComponent className="h-full w-full" />
               </div>
             </div>
           </div>
