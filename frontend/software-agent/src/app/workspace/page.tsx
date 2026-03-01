@@ -452,8 +452,16 @@ function WorkspaceContent() {
                 <ChatPanel
                   taskId={taskId}
                   events={events}
-                  onSendMessage={(message) => {
-                    console.log("Sending message:", message);
+                  onSendMessage={async (message) => {
+                    try {
+                      await fetch(`http://localhost:8000/api/task/${taskId}/message`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ message }),
+                      });
+                    } catch (err) {
+                      console.error("Failed to send message:", err);
+                    }
                   }}
                   isLoading={taskStatus === "running"}
                 />

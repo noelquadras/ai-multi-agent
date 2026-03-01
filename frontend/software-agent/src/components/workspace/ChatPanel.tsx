@@ -223,6 +223,15 @@ function eventToChatMessage(event: TaskEvent, index: number): ChatMessage | null
                 color: "text-orange-500",
             };
 
+        case "human_message":
+            return {
+                ...base,
+                role: "user",
+                content: event.message,
+                icon: <User className="w-3 h-3 text-blue-400" />,
+                color: "text-blue-400",
+            };
+
         case "log":
             // Skip generic log messages to reduce noise — they're visible in the Activity panel
             return null;

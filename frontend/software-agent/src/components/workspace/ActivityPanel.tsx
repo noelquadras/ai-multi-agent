@@ -60,6 +60,7 @@ export type TaskEvent =
   | { type: "task_paused"; message: string; timestamp: string }
   | { type: "task_resumed"; message: string; timestamp: string }
   | { type: "human_approval"; approved: boolean; message: string; timestamp: string }
+  | { type: "human_message"; message: string; timestamp: string }
   | { type: "task_cancelled"; message: string; timestamp: string };
 
 interface ActivityPanelProps {
@@ -328,6 +329,12 @@ function EventRow({ event }: { event: TaskEvent }) {
       ) : (
         <XCircle className="w-3 h-3" />
       );
+      label = "Human";
+      message = event.message;
+      break;
+
+    case "human_message":
+      color = "text-blue-400";
       label = "Human";
       message = event.message;
       break;

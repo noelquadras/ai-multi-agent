@@ -31,7 +31,8 @@ from database import (
     get_task_prompt,
     emit_event, 
     subscribers,
-    soft_delete_task
+    soft_delete_task,
+    store_human_message,
 )
 
 load_dotenv()
@@ -449,6 +450,26 @@ IMPORTANT USER FEEDBACK (address this as top priority):
     threading.Thread(target=run_crew, args=(new_task_id, new_prompt, model), daemon=True).start()
     
     return {"task_id": new_task_id, "model": model}
+
+class HumanMessageRequest(BaseModel):
+    message: str
+
+@app.post("/api/task/{task_id}/message")
+async def post_human_message(task_id: str, body: HumanMessageRequest):
+    """Receives a human chat message and stores it for the supervisor to pick up."""
+    if not body.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    # Persist so the supervisor can read it on the next iteration
+    store_human_message(task_id, body.message.strip())
+
+    # Broadcast as an SSE event so the UI confirms delivery
+    emit_event(task_id, {
+        "type": "human_message",
+        "message": body.message.strip(),
+    })
+
+    return {"status": "sent"}
 
 @app.post("/api/run-crew")
 async def run_crew_api(req: CrewRequest):

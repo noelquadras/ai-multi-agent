@@ -19,7 +19,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.action_types import ActionType, make_action_message
 from agents.llm_config import get_llm, check_interrupts
-from database import emit_event
+from database import emit_event, get_human_messages
 
 
 # ─────────────────────────────────────────────
@@ -212,6 +212,12 @@ def react_supervisor_node(state: AgentState) -> dict:
     react_plan = ensure_plan_object(state.get("react_plan_obj"))
     events = state.get("events", [])
     recent_events = events[-6:]
+
+    # ─── INJECT PENDING HUMAN MESSAGES ────────
+    human_msgs = get_human_messages(task_id, mark_consumed=True)
+    for hm in human_msgs:
+        recent_events.append({"type": "human_message", "message": hm["message"]})
+        emit_event(task_id, {"type": "log", "message": f"Read human message: {hm['message']}"})
 
     llm = get_llm(
         for_heavy_task=False,
