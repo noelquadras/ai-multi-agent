@@ -26,6 +26,7 @@ import {
     Play,
     StopCircle,
     HelpCircle,
+    ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TaskEvent } from "@/components/workspace/ActivityPanel";
@@ -44,6 +45,7 @@ export interface ChatMessage {
     icon?: React.ReactNode;
     color?: string;
     name?: string;
+    eventType?: string;
 }
 
 interface ChatPanelProps {
@@ -195,6 +197,8 @@ const EVENT_CONFIG: Record<string, EventConfig> = {
     },
 };
 
+const THOUGHT_EVENT_TYPES = new Set(["tool_call", "agent_start", "agent_end"]);
+
 function eventToChatMessage(event: TaskEvent, index: number): ChatMessage | null {
     if (event.type === "log") return null;
 
@@ -213,6 +217,7 @@ function eventToChatMessage(event: TaskEvent, index: number): ChatMessage | null
                 ? <CheckCircle className="w-3 h-3 text-green-500" />
                 : <XCircle className="w-3 h-3 text-red-500" />,
             color: event.approved ? "text-green-500" : "text-red-500",
+            eventType: event.type,
         };
     }
 
@@ -225,6 +230,7 @@ function eventToChatMessage(event: TaskEvent, index: number): ChatMessage | null
         icon: config.icon,
         color: config.color,
         agent: config.agent?.(event),
+        eventType: event.type,
     };
 }
 
@@ -282,6 +288,58 @@ function TypingIndicator() {
                 <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce [animation-delay:150ms]" />
                 <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce [animation-delay:300ms]" />
             </div>
+        </div>
+    );
+}
+
+function ThoughtBubble({ message }: { message: ChatMessage }) {
+    const [expanded, setExpanded] = useState(false);
+
+    const label =
+        message.eventType === "tool_call"
+            ? "Tool Call"
+            : message.eventType === "agent_start"
+                ? "Agent Started"
+                : message.eventType === "agent_end"
+                    ? "Agent Completed"
+                    : "Thought";
+
+    return (
+        <div className="px-4 py-0.5">
+            <button
+                onClick={() => setExpanded((v) => !v)}
+                className="group/thought flex items-center gap-2 w-full text-left py-1.5 px-3 rounded-lg hover:bg-muted/40 transition-colors"
+            >
+                <ChevronRight
+                    className={cn(
+                        "w-3 h-3 text-muted-foreground/50 transition-transform duration-200 shrink-0",
+                        expanded && "rotate-90"
+                    )}
+                />
+                {message.icon}
+                <span className="text-[11px] text-muted-foreground/60 font-medium">
+                    {label}
+                </span>
+                {message.agent && (
+                    <Badge
+                        variant="outline"
+                        className="text-[9px] px-1.5 py-0 border-border/50 text-muted-foreground/50"
+                    >
+                        {message.agent}
+                    </Badge>
+                )}
+                <span className="text-[10px] text-muted-foreground/30 ml-auto">
+                    {formatTime(message.timestamp)}
+                </span>
+            </button>
+
+            {expanded && (
+                <div className="ml-8 mt-1 mb-1 px-3 py-2 rounded-lg bg-muted/20 border border-border/30">
+                    <p className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground/70 leading-relaxed">
+                        {message.content}
+                    </p>
+                </div>
+            )}
         </div>
     );
 }
@@ -523,9 +581,13 @@ export function ChatPanel({
                         )}
 
                         {/* Message list */}
-                        {messages.map((msg) => (
-                            <MessageBubble key={msg.id} message={msg} />
-                        ))}
+                        {messages.map((msg) =>
+                            msg.eventType && THOUGHT_EVENT_TYPES.has(msg.eventType) ? (
+                                <ThoughtBubble key={msg.id} message={msg} />
+                            ) : (
+                                <MessageBubble key={msg.id} message={msg} />
+                            )
+                        )}
 
                         {/* Typing indicator */}
                         {(isLoading || isSending) && <TypingIndicator />}
