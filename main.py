@@ -79,7 +79,7 @@ def run_software_crew(
     benchmark_test_code: str | None = None,
 ):
 
-    set_model_config(model, "")
+    set_model_config(model)
 
     graph = create_agent_graph()
 

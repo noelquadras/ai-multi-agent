@@ -668,20 +668,35 @@ async def get_available_models():
     except Exception as e:
         print(f"Failed to fetch Ollama models: {e}")
 
-    # 2. Load static/cloud models
-    try:
-        with open("models.json", "r") as f:
-            static_models = json.load(f)
-            # Add type field to static models if missing
-            for m in static_models:
-                if "type" not in m:
-                    m["type"] = "cloud" if "Cloud" in m["name"] else "local"
-    except Exception:
-        static_models = []
+    # 2. Fetch Groq cloud models using the user's API key
+    groq_models = []
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if groq_api_key:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {groq_api_key}"},
+                    timeout=5.0,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    for model in data.get("data", []):
+                        model_id = model.get("id", "")
+                        groq_models.append({
+                            "id": model_id,
+                            "name": f"{model_id} (Groq)",
+                            "speed": "fast",
+                            "cost": "paid",
+                            "description": f"Groq cloud model: {model_id}",
+                            "type": "cloud",
+                            "owned_by": model.get("owned_by", ""),
+                        })
+        except Exception as e:
+            print(f"Failed to fetch Groq models: {e}")
 
-    # 3. Combine (local first, then static)
-    # Deduplicate by ID if needed, but usually local and static won't clash if named differently
-    return {"models": local_models + static_models}
+    # 3. Combine (local first, then Groq cloud)
+    return {"models": local_models + groq_models}
 
 if __name__ == "__main__":
     import uvicorn
