@@ -148,7 +148,7 @@ export function CodeWorkspace({
     <Card className="h-full border-none rounded-none border-r border-border bg-card flex flex-col">
       <CardHeader className="p-0 border-b border-border bg-card flex flex-row items-center justify-between h-[3.2rem]">
         {/* File Tabs */}
-        <div className="flex h-full overflow-x-auto scrollbar-thin">
+        <div className="flex h-full overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           {displayFiles.map((file) => (
             <button
               key={file.filename}
