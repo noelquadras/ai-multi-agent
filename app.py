@@ -317,6 +317,38 @@ async def websocket_terminal(websocket: WebSocket, client_id: str):
         print(f"Terminal Error: {e}")
         await websocket.close()
 
+
+@app.websocket("/ws/terminal-commands/{client_id}")
+async def websocket_terminal_commands(websocket: WebSocket, client_id: str):
+    """
+    Streams only structured command events to the frontend.
+
+    Each message is a JSON object:
+      {"type": "command_start", "command": "python main.py"}
+      {"type": "command_output", "command": "python main.py", "output": "Hello world", "exit_code": 0}
+    """
+    await websocket.accept()
+    session_id = "project_terminal_v1"
+
+    try:
+        session = terminal_manager.get_or_create_session(session_id)
+
+        async for event in session.read_command_events():
+            try:
+                await websocket.send_json(event)
+            except Exception:
+                break
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"Terminal Commands WS Error: {e}")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
 # --- CONTROL ROUTES ---
 
 class TerminalCommand(BaseModel):

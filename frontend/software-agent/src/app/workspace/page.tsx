@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import dynamic from "next/dynamic";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
+import { useTerminalCommands } from "@/hooks/useTerminalCommands";
 
 const TerminalComponent = dynamic(
   () => import("@/components/Terminal").then((mod) => mod.Terminal),
@@ -88,6 +89,9 @@ function WorkspaceContent() {
   const [codeFiles, setCodeFiles] = useState<CodeFile[]>([]);
   const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli" | "docs">("activity");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+
+  // Structured command events from the terminal WebSocket
+  const { commands: terminalCommands } = useTerminalCommands();
 
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -538,7 +542,7 @@ function WorkspaceContent() {
                     )}
                     {rightActiveTab === "cli" && (
                       <div className="absolute inset-0 overflow-hidden">
-                        <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
+                        <CLIPanel logs={cliLogs} testResults={outputs.testResults} commandRecords={terminalCommands} />
                       </div>
                     )}
                     {rightActiveTab === "docs" && (
