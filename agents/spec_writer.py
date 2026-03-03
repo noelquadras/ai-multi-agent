@@ -121,6 +121,7 @@ def spec_writer_node(state: AgentState) -> AgentState:
                 "type": "spec_output",
                 "agent": "spec_writer",
                 "spec": spec_display,
+                "filename": "spec.md"
             })
 
             emit_event(state["task_id"], {

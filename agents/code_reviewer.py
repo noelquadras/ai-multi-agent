@@ -122,6 +122,7 @@ def code_reviewer_node(state: AgentState) -> AgentState:
             "type": "review_output",
             "agent": "reviewer",
             "review": review_display,
+            "filename": "review.md"
         })
 
         review_summary = f"Review: score={review_output_dict['overall_score']}/10, verdict={review_output_dict['verdict']}" if review_output_dict else f"Review: {len(review)} chars (raw)"

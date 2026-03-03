@@ -40,9 +40,9 @@ export type TaskEvent =
   | { type: "system_error"; error: string; timestamp: string }
   | { type: "log"; message: string; timestamp: string }
   | { type: "tool_call"; name: any; args: any; timestamp: string }
-  | { type: "code_output"; agent: string; code: string; timestamp: string }
-  | { type: "spec_output"; agent: string; spec: string; timestamp: string }
-  | { type: "review_output"; agent: string; review: string; timestamp: string }
+  | { type: "code_output"; agent: string; code: string; timestamp: string; filename?: string }
+  | { type: "spec_output"; agent: string; spec: string; timestamp: string; filename?: string }
+  | { type: "review_output"; agent: string; review: string; timestamp: string; filename?: string }
   | {
     type: "decision_output";
     agent: string;
