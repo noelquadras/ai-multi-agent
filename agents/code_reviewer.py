@@ -109,6 +109,21 @@ def code_reviewer_node(state: AgentState) -> AgentState:
         else:
             save_artifact(state["task_id"], f"reviews/review_{n:03d}.txt", review)
         
+        # Build a human-readable review for the frontend
+        if review_output_dict:
+            review_display = _format_review_output(ReviewOutput(**review_output_dict))
+        else:
+            review_display = review
+        
+        # Save as latest (overwrite to keep only the newest)
+        save_artifact(state["task_id"], "reviews/review_latest.md", review_display)
+
+        emit_event(state["task_id"], {
+            "type": "review_output",
+            "agent": "reviewer",
+            "review": review_display,
+        })
+
         review_summary = f"Review: score={review_output_dict['overall_score']}/10, verdict={review_output_dict['verdict']}" if review_output_dict else f"Review: {len(review)} chars (raw)"
         
         review_data = {

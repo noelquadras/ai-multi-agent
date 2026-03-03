@@ -105,6 +105,24 @@ def spec_writer_node(state: AgentState) -> AgentState:
             spec_path.write_text(spec.model_dump_json(indent=2))
             spec_doc_path = str(spec_path)
             
+            # Build human-readable spec content for the frontend
+            spec_display = (
+                f"# Technical Specification\n\n"
+                f"## Implementation Approach\n{spec.implementation_approach}\n\n"
+                f"## File List\n" + "\n".join(f"- {f}" for f in spec.file_list) + "\n\n"
+                f"## Class / Function Design\n{spec.class_design}\n\n"
+                f"## Key Edge Cases\n" + "\n".join(f"- {ec}" for ec in spec.key_edge_cases) + "\n\n"
+                f"## Complexity Estimate\n{spec.complexity_estimate}\n"
+            )
+            # Save a readable spec artifact (overwrite to keep latest only)
+            save_artifact(state["task_id"], "spec/spec_latest.md", spec_display)
+
+            emit_event(state["task_id"], {
+                "type": "spec_output",
+                "agent": "spec_writer",
+                "spec": spec_display,
+            })
+
             emit_event(state["task_id"], {
                 "type": "log",
                 "message": f"Spec written: {spec.complexity_estimate} complexity, "

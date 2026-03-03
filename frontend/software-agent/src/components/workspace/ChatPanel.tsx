@@ -117,6 +117,13 @@ const EVENT_CONFIG: Record<string, EventConfig> = {
         content: (e) => e.review,
         agent: (e) => e.agent,
     },
+    spec_output: {
+        role: "assistant",
+        icon: <FileText className="w-3 h-3 text-emerald-400" />,
+        color: "text-emerald-400",
+        content: (e) => e.spec?.length > 300 ? e.spec.slice(0, 300) + "\n..." : e.spec,
+        agent: (e) => e.agent,
+    },
     decision_output: {
         role: "assistant",
         icon: <CheckCircle className="w-3 h-3 text-purple-400" />,

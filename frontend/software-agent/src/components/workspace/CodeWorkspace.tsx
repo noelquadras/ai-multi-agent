@@ -10,6 +10,8 @@ import {
   Copy,
   CodeIcon,
   Play,
+  FileSearch,
+  ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -22,6 +24,8 @@ interface CodeWorkspaceProps {
   code?: string;
   isReadOnly?: boolean;
   codeFiles?: CodeFile[];
+  specFile?: CodeFile | null;
+  reviewFile?: CodeFile | null;
   onCopyCode?: (code: string) => void;
 }
 
@@ -29,6 +33,8 @@ export function CodeWorkspace({
   code = "",
   isReadOnly = false,
   codeFiles = [],
+  specFile = null,
+  reviewFile = null,
   onCopyCode,
 }: CodeWorkspaceProps) {
   const [activeFile, setActiveFile] = useState<string>("");
@@ -44,13 +50,16 @@ export function CodeWorkspace({
     }
   }, [codeFiles, code]);
 
-  // Build the display list: either codeFiles or fallback to code prop
-  const displayFiles: CodeFile[] =
-    codeFiles.length > 0
-      ? codeFiles
+  // Build the display list: code files + spec/review as separate "meta" files
+  const displayFiles: CodeFile[] = [
+    ...(codeFiles.length > 0
+      ? [...codeFiles].reverse()
       : code
         ? [{ filename: "code.py", content: code }]
-        : [];
+        : []),
+    ...(specFile ? [specFile] : []),
+    ...(reviewFile ? [reviewFile] : []),
+  ];
 
   const activeContent =
     displayFiles.find((f) => f.filename === activeFile)?.content || "";
@@ -93,6 +102,8 @@ export function CodeWorkspace({
   };
 
   const getFileIcon = (fileName: string) => {
+    if (fileName === "spec.md") return "📋";
+    if (fileName === "review.md") return "🔍";
     if (fileName.endsWith(".tsx") || fileName.endsWith(".jsx")) return "⚛";
     if (fileName.endsWith(".ts") || fileName.endsWith(".js")) return "{}";
     if (fileName.endsWith(".py")) return "🐍";
@@ -102,6 +113,8 @@ export function CodeWorkspace({
   };
 
   const getFileColor = (fileName: string) => {
+    if (fileName === "spec.md") return "text-[#34d399]";
+    if (fileName === "review.md") return "text-[#fbbf24]";
     if (fileName.endsWith(".tsx") || fileName.endsWith(".jsx"))
       return "text-[#61dafb]";
     if (fileName.endsWith(".ts") || fileName.endsWith(".js"))
@@ -109,6 +122,10 @@ export function CodeWorkspace({
     if (fileName.endsWith(".py")) return "text-[#3776ab]";
     if (fileName.endsWith(".md")) return "text-[#74c0fc]";
     return "text-zinc-400";
+  };
+
+  const isCodeFile = (fileName: string) => {
+    return fileName.endsWith(".py") || fileName.endsWith(".js") || fileName.endsWith(".ts") || fileName.endsWith(".tsx");
   };
 
   if (displayFiles.length === 0) {
@@ -173,16 +190,18 @@ export function CodeWorkspace({
         <div className="px-4 flex items-center gap-3">
           {activeContent && activeContent.length > 0 && (
             <>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleRunCode()}
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
-                title="Run in Terminal"
-              >
-                <Play className="w-3 h-3 mr-1" />
-                Run
-              </Button>
+              {isCodeFile(activeFile) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleRunCode()}
+                  className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
+                  title="Run in Terminal"
+                >
+                  <Play className="w-3 h-3 mr-1" />
+                  Run
+                </Button>
+              )}
 
               <Button
                 variant="ghost"
@@ -198,9 +217,18 @@ export function CodeWorkspace({
 
           <Badge
             variant="outline"
-            className="border-primary/20 bg-primary/10 text-primary text-[10px] font-bold px-2 py-0.5 rounded-sm"
+            className={`text-[10px] font-bold px-2 py-0.5 rounded-sm ${activeFile === "spec.md"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+              : activeFile === "review.md"
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
+                : "border-primary/20 bg-primary/10 text-primary"
+              }`}
           >
-            AI-GENERATED
+            {activeFile === "spec.md"
+              ? "SPEC"
+              : activeFile === "review.md"
+                ? "REVIEW"
+                : "AI-GENERATED"}
           </Badge>
         </div>
       </CardHeader>

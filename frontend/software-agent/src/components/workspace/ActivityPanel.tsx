@@ -41,6 +41,7 @@ export type TaskEvent =
   | { type: "log"; message: string; timestamp: string }
   | { type: "tool_call"; name: any; args: any; timestamp: string }
   | { type: "code_output"; agent: string; code: string; timestamp: string }
+  | { type: "spec_output"; agent: string; spec: string; timestamp: string }
   | { type: "review_output"; agent: string; review: string; timestamp: string }
   | {
     type: "decision_output";
@@ -277,6 +278,13 @@ function EventRow({ event }: { event: TaskEvent }) {
       label = event.agent;
       icon = <FileText className="w-3 h-3" />;
       message = "completed code review";
+      break;
+
+    case "spec_output":
+      color = "text-emerald-400";
+      label = event.agent;
+      icon = <FileText className="w-3 h-3" />;
+      message = "generated technical specification";
       break;
 
     case "decision_output":

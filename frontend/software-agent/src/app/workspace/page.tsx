@@ -87,6 +87,8 @@ function WorkspaceContent() {
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
   const [codeFiles, setCodeFiles] = useState<CodeFile[]>([]);
+  const [specFile, setSpecFile] = useState<CodeFile | null>(null);
+  const [reviewFile, setReviewFile] = useState<CodeFile | null>(null);
   const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli" | "docs">("activity");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
 
@@ -202,6 +204,11 @@ function WorkspaceContent() {
     }
     if (event.type === "review_output" && event.review) {
       setOutputs((prev) => ({ ...prev, review: event.review }));
+      setReviewFile({ filename: "review.md", content: event.review });
+      setRightActiveTab("activity");
+    }
+    if (event.type === "spec_output" && event.spec) {
+      setSpecFile({ filename: "spec.md", content: event.spec });
       setRightActiveTab("activity");
     }
     if (event.type === "decision_output" && event.decision) {
@@ -278,6 +285,8 @@ function WorkspaceContent() {
     });
     setCliLogs([]);
     setCodeFiles([]);
+    setSpecFile(null);
+    setReviewFile(null);
 
     // Fetch existing code versions from disk
     fetch(`http://localhost:8000/api/task/${taskId}/code-versions`)
@@ -288,6 +297,26 @@ function WorkspaceContent() {
           // Set the latest code as output
           const latest = data.files[data.files.length - 1];
           setOutputs((prev) => ({ ...prev, code: latest.content }));
+        }
+      })
+      .catch(() => { });
+
+    // Fetch latest spec from disk
+    fetch(`http://localhost:8000/api/task/${taskId}/spec`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.spec) {
+          setSpecFile({ filename: "spec.md", content: data.spec });
+        }
+      })
+      .catch(() => { });
+
+    // Fetch latest review from disk
+    fetch(`http://localhost:8000/api/task/${taskId}/review`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.review) {
+          setReviewFile({ filename: "review.md", content: data.review });
         }
       })
       .catch(() => { });
@@ -499,7 +528,7 @@ function WorkspaceContent() {
               </div>
 
               <div className="flex-1 overflow-hidden">
-                <CodeWorkspace code={outputs.code} codeFiles={codeFiles} isReadOnly />
+                <CodeWorkspace code={outputs.code} codeFiles={codeFiles} specFile={specFile} reviewFile={reviewFile} isReadOnly />
               </div>
 
               <div className="hidden xl:flex flex-col border-l border-border w-[450px]">

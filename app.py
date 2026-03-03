@@ -643,6 +643,63 @@ async def get_code_versions(task_id: str):
         })
     return {"task_id": task_id, "files": files}
 
+
+@app.get("/api/task/{task_id}/spec")
+async def get_task_spec(task_id: str):
+    """Return the latest spec artifact for a task."""
+    from agents.artifacts import load_artifact
+    # Try the readable markdown spec first
+    content = load_artifact(task_id, "spec/spec_latest.md")
+    if content:
+        return {"task_id": task_id, "spec": content}
+    # Fallback: try the JSON design spec and format it
+    content = load_artifact(task_id, "spec/design.json")
+    if content:
+        try:
+            data = json.loads(content)
+            formatted = (
+                f"# Technical Specification\n\n"
+                f"## Implementation Approach\n{data.get('implementation_approach', '')}\n\n"
+                f"## File List\n" + "\n".join(f"- {f}" for f in data.get('file_list', [])) + "\n\n"
+                f"## Class / Function Design\n{data.get('class_design', '')}\n\n"
+                f"## Key Edge Cases\n" + "\n".join(f"- {ec}" for ec in data.get('key_edge_cases', [])) + "\n\n"
+                f"## Complexity Estimate\n{data.get('complexity_estimate', 'unknown')}\n"
+            )
+            return {"task_id": task_id, "spec": formatted}
+        except Exception:
+            return {"task_id": task_id, "spec": content}
+    return {"task_id": task_id, "spec": None}
+
+
+@app.get("/api/task/{task_id}/review")
+async def get_task_review(task_id: str):
+    """Return the latest review artifact for a task."""
+    from agents.artifacts import load_artifact
+    content = load_artifact(task_id, "reviews/review_latest.md")
+    if content:
+        return {"task_id": task_id, "review": content}
+    # Fallback: try to find the latest numbered review
+    from pathlib import Path
+    review_dir = Path("tasks") / task_id / "reviews"
+    if review_dir.exists():
+        # Find the latest review file
+        reviews = sorted(review_dir.glob("review_*.json")) + sorted(review_dir.glob("review_*.txt"))
+        if reviews:
+            latest = reviews[-1]
+            content = latest.read_text(encoding="utf-8")
+            if latest.suffix == ".json":
+                try:
+                    data = json.loads(content)
+                    from agents.schemas import ReviewOutput
+                    from agents.code_reviewer import _format_review_output
+                    formatted = _format_review_output(ReviewOutput(**data))
+                    return {"task_id": task_id, "review": formatted}
+                except Exception:
+                    return {"task_id": task_id, "review": content}
+            return {"task_id": task_id, "review": content}
+    return {"task_id": task_id, "review": None}
+
+
 @app.get("/api/models")
 async def get_available_models():
     # 1. Fetch local Ollama models

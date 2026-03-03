@@ -275,7 +275,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
             History
           </SidebarGroupLabel>
           <SidebarGroupContent>
-            <ScrollArea className="max-h-[280px]">
+            <div className="max-h-[280px] overflow-y-auto overflow-x-hidden history-scroll-hide">
               <SidebarMenu>
                 {loading ? (
                   <div className="flex justify-center py-4">
@@ -329,7 +329,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
                   ))
                 )}
               </SidebarMenu>
-            </ScrollArea>
+            </div>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
