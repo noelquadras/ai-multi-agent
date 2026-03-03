@@ -54,6 +54,8 @@ interface ChatPanelProps {
     events?: TaskEvent[];
     isLoading?: boolean;
     className?: string;
+    initialPrompt?: string;
+    initialTimestamp?: string;
 }
 
 /* =========================
@@ -453,6 +455,8 @@ export function ChatPanel({
     events,
     isLoading = false,
     className,
+    initialPrompt,
+    initialTimestamp,
 }: ChatPanelProps) {
     const [userMessages, setUserMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState("");
@@ -473,9 +477,20 @@ export function ChatPanel({
     /* ---- Merge event messages with user-typed messages, sorted by time ---- */
     const messages = useMemo(() => {
         const all = [...eventMessages, ...userMessages];
+
+        if (initialPrompt) {
+            all.push({
+                id: "initial_prompt",
+                role: "user",
+                content: initialPrompt,
+                timestamp: initialTimestamp || new Date().toISOString(),
+                status: "complete",
+            });
+        }
+
         all.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         return all;
-    }, [eventMessages, userMessages]);
+    }, [eventMessages, userMessages, initialPrompt, initialTimestamp]);
 
     /* ---- Auto-scroll ---- */
     useEffect(() => {

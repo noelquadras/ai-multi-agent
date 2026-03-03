@@ -47,6 +47,8 @@ interface TaskSnapshot {
   task_id: string;
   status: "pending" | "running" | "completed" | "failed" | "paused" | "cancelled";
   model?: string;
+  prompt?: string;
+  created_at?: string;
   events: TaskEvent[];
 }
 
@@ -77,6 +79,8 @@ function WorkspaceContent() {
   const [taskStatus, setTaskStatus] =
     useState<TaskSnapshot["status"]>("pending");
   const [taskModel, setTaskModel] = useState<string>("ollama");
+  const [taskPrompt, setTaskPrompt] = useState<string>("");
+  const [taskCreatedAt, setTaskCreatedAt] = useState<string>("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [outputs, setOutputs] = useState<TaskOutputs>({
     code: "",
@@ -261,6 +265,8 @@ function WorkspaceContent() {
       const data: TaskSnapshot = await res.json();
       setTaskStatus(data.status);
       setTaskModel(data.model || "ollama");
+      setTaskPrompt(data.prompt || "");
+      setTaskCreatedAt(data.created_at || "");
       // Pre-apply historical events to the UI
       if (data.events) {
         data.events.forEach(applyEvent);
@@ -287,6 +293,8 @@ function WorkspaceContent() {
     setCodeFiles([]);
     setSpecFile(null);
     setReviewFile(null);
+    setTaskPrompt("");
+    setTaskCreatedAt("");
 
     // Fetch existing code versions from disk
     fetch(`http://localhost:8000/api/task/${taskId}/code-versions`)
@@ -512,6 +520,8 @@ function WorkspaceContent() {
                 <ChatPanel
                   taskId={taskId}
                   events={events}
+                  initialPrompt={taskPrompt}
+                  initialTimestamp={taskCreatedAt}
                   onSendMessage={async (message) => {
                     try {
                       await fetch(`http://localhost:8000/api/task/${taskId}/message`, {

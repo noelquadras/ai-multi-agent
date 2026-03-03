@@ -243,14 +243,22 @@ async def task_snapshot(task_id: str):
     """Fetches full state from DB for a specific task."""
     with get_db_conn() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT status, model FROM tasks WHERE task_id = ?", (task_id,))
+        cursor.execute("SELECT status, model, prompt, created_at FROM tasks WHERE task_id = ?", (task_id,))
         task_data = cursor.fetchone()
         if not task_data: raise HTTPException(status_code=404, detail="Task not found")
         
         cursor.execute("SELECT data FROM events WHERE task_id = ? ORDER BY id ASC", (task_id,))
         events = [json.loads(row[0]) for row in cursor.fetchall()]
         
-    return {"task_id": task_id, "status": task_data[0], "model": task_data[1], "events": events}
+    return {
+        "task_id": task_id, 
+        "status": task_data[0], 
+        "model": task_data[1], 
+        "prompt": task_data[2],
+        "created_at": task_data[3],
+        "events": events
+    }
+
 
 @app.get("/api/task/{task_id}/events")
 async def stream_events(task_id: str, request: Request):
