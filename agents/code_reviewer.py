@@ -73,7 +73,38 @@ def code_reviewer_node(state: AgentState) -> AgentState:
             base_model=state.get("model", "ollama")
         )
         structured_llm = llm.with_structured_output(ReviewOutput)
-        
+
+        # ── Streaming pass: show tokens in real-time ─────────────────────
+        from database import broadcast_event
+        accumulated_text = ""
+        try:
+            for chunk in llm.stream(messages):
+                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if token:
+                    accumulated_text += token
+                    broadcast_event(state["task_id"], {
+                        "type": "review_stream",
+                        "agent": "reviewer",
+                        "chunk": token,
+                        "done": False,
+                    })
+            # Signal stream end
+            broadcast_event(state["task_id"], {
+                "type": "review_stream",
+                "agent": "reviewer",
+                "chunk": "",
+                "done": True,
+            })
+        except Exception as stream_err:
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"Review streaming failed, falling back to invoke: {stream_err}"
+            })
+            if not accumulated_text:
+                response = _trimmed_invoke(llm, messages)
+                accumulated_text = response.content
+
+        # ── Structured parse pass ────────────────────────────────────────
         # Parse structured output, fall back to raw string
         review_output_dict = None
         try:
@@ -81,9 +112,8 @@ def code_reviewer_node(state: AgentState) -> AgentState:
             review_output_dict = result.model_dump()
             review = result.model_dump_json(indent=2)  # pretty JSON for SSE display
         except Exception:
-            # Fallback: with_structured_output failed, try raw invoke
-            response = _trimmed_invoke(llm, messages)
-            review = response.content
+            # Fallback: with_structured_output failed, use accumulated text
+            review = accumulated_text
         
         emit_event(state["task_id"], {
             "type": "log",

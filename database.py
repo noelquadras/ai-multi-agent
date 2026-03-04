@@ -214,6 +214,14 @@ def emit_event(task_id: str, event: Dict[str, Any]):
         for q in subscribers[task_id]:
             q.put_nowait(event)
 
+
+def broadcast_event(task_id: str, event: Dict[str, Any]):
+    """Push event to live UI listeners WITHOUT saving to DB (for stream chunks)."""
+    event["timestamp"] = datetime.now().isoformat()
+    if task_id in subscribers:
+        for q in subscribers[task_id]:
+            q.put_nowait(event)
+
 def get_task_prompt(task_id: str) -> Optional[str]:
     """Gets the original prompt for a task."""
     with get_db_conn() as conn:

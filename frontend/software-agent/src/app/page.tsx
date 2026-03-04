@@ -41,10 +41,10 @@ export default function HomePage() {
   const [agentModels, setAgentModels] = useState<AgentModels>({
     coder: "default",
     reviewer: "default",
-    decision: "default",
     refiner: "default",
-    doc_writer: "default",
     tester: "default",
+    supervisor: "default",
+    spec_writer: "default",
   });
 
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(

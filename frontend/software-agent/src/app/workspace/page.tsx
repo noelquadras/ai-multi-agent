@@ -55,17 +55,16 @@ interface TaskSnapshot {
 interface TaskOutputs {
   code: string;
   review: string;
-  decision: string;
-  documentation: string;
   testResults: string;
 }
+
 
 interface CodeFile {
   filename: string;
   content: string;
 }
 
-type SidePanel = "cli" | "docs" | "terminal";
+type SidePanel = "cli" | "terminal";
 
 /* =========================
    COMPONENTS
@@ -85,15 +84,15 @@ function WorkspaceContent() {
   const [outputs, setOutputs] = useState<TaskOutputs>({
     code: "",
     review: "",
-    decision: "",
-    documentation: "",
     testResults: "",
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
   const [codeFiles, setCodeFiles] = useState<CodeFile[]>([]);
   const [specFile, setSpecFile] = useState<CodeFile | null>(null);
   const [reviewFile, setReviewFile] = useState<CodeFile | null>(null);
-  const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli" | "docs">("activity");
+  const [streamingFile, setStreamingFile] = useState<string | null>(null);
+  const [streamingContent, setStreamingContent] = useState<string>("");
+  const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli">("activity");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
 
   // Structured command events from the terminal WebSocket
@@ -107,6 +106,13 @@ function WorkspaceContent() {
   ========================= */
 
   const AGENT_REGISTRY: Record<string, AgentStatus> = {
+    supervisor: {
+      id: "supervisor",
+      name: "Supervisor",
+      role: "Manager",
+      status: "idle",
+      progress: 0,
+    },
     spec_writer: {
       id: "spec_writer",
       name: "Spec Writer",
@@ -128,13 +134,6 @@ function WorkspaceContent() {
       status: "idle",
       progress: 0,
     },
-    decision: {
-      id: "decision",
-      name: "Decision",
-      role: "Auditor",
-      status: "idle",
-      progress: 0,
-    },
     refiner: {
       id: "refiner",
       name: "Refiner",
@@ -146,13 +145,6 @@ function WorkspaceContent() {
       id: "tester",
       name: "Tester",
       role: "CLI Testing",
-      status: "idle",
-      progress: 0,
-    },
-    doc_writer: {
-      id: "doc_writer",
-      name: "Doc Writer",
-      role: "Documentation",
       status: "idle",
       progress: 0,
     },
@@ -197,6 +189,8 @@ function WorkspaceContent() {
 
     if (event.type === "code_output" && event.code) {
       setOutputs((prev) => ({ ...prev, code: event.code }));
+      setStreamingFile(null);
+      setStreamingContent("");
       // Add the new version to the codeFiles list
       const filename = (event as any).filename || "code.py";
       setCodeFiles((prev) => {
@@ -209,20 +203,53 @@ function WorkspaceContent() {
     if (event.type === "review_output" && event.review) {
       setOutputs((prev) => ({ ...prev, review: event.review }));
       setReviewFile({ filename: "review.md", content: event.review });
+      setStreamingFile(null);
+      setStreamingContent("");
       setRightActiveTab("activity");
     }
     if (event.type === "spec_output" && event.spec) {
       setSpecFile({ filename: "spec.md", content: event.spec });
+      setStreamingFile(null);
+      setStreamingContent("");
       setRightActiveTab("activity");
     }
-    if (event.type === "decision_output" && event.decision) {
-      setOutputs((prev) => ({ ...prev, decision: event.decision }));
-      setRightActiveTab("activity");
+
+    // ── Streaming events ────────────────────────────────────────
+    if (event.type === "spec_stream") {
+      if (event.done) {
+        // Stream ended — final spec_output event will commit the file
+      } else {
+        setStreamingFile((prev) => {
+          if (prev !== "spec.md") setStreamingContent("");
+          return "spec.md";
+        });
+        setStreamingContent((prev) => prev + (event.chunk || ""));
+      }
     }
-    if (event.type === "doc_output" && event.documentation) {
-      setOutputs((prev) => ({ ...prev, documentation: event.documentation }));
-      setRightActiveTab("docs");
+    if (event.type === "code_stream") {
+      if (event.done) {
+        setStreamingFile(null);
+        setStreamingContent("");
+      } else {
+        setStreamingFile((prev) => {
+          if (prev !== "generating...") setStreamingContent("");
+          return "generating...";
+        });
+        setStreamingContent((prev) => prev + (event.chunk || ""));
+      }
     }
+    if (event.type === "review_stream") {
+      if (event.done) {
+        // Stream ended — final review_output event will commit the file
+      } else {
+        setStreamingFile((prev) => {
+          if (prev !== "review.md") setStreamingContent("");
+          return "review.md";
+        });
+        setStreamingContent((prev) => prev + (event.chunk || ""));
+      }
+    }
+
     if (event.type === "test_output" && event.results) {
       setOutputs((prev) => ({ ...prev, testResults: event.results }));
       setRightActiveTab("cli");
@@ -285,8 +312,6 @@ function WorkspaceContent() {
     setOutputs({
       code: "",
       review: "",
-      decision: "",
-      documentation: "",
       testResults: "",
     });
     setCliLogs([]);
@@ -538,7 +563,7 @@ function WorkspaceContent() {
               </div>
 
               <div className="flex-1 overflow-hidden">
-                <CodeWorkspace code={outputs.code} codeFiles={codeFiles} specFile={specFile} reviewFile={reviewFile} isReadOnly />
+                <CodeWorkspace code={outputs.code} codeFiles={codeFiles} specFile={specFile} reviewFile={reviewFile} streamingFile={streamingFile} streamingContent={streamingContent} isReadOnly />
               </div>
 
               <div className="hidden xl:flex flex-col border-l border-border w-[450px]">
@@ -553,6 +578,7 @@ function WorkspaceContent() {
                     >
                       <Activity className="w-3.5 h-3.5" /> Activity
                     </button>
+
                     <button
                       onClick={() => setRightActiveTab("cli")}
                       className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "cli"
@@ -565,15 +591,6 @@ function WorkspaceContent() {
                         <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
                       )}
                     </button>
-                    <button
-                      onClick={() => setRightActiveTab("docs")}
-                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "docs"
-                        ? "bg-muted text-foreground border-b-2 border-blue-500"
-                        : "text-muted-foreground hover:text-foreground"
-                        }`}
-                    >
-                      <FileText className="w-3.5 h-3.5" /> Docs
-                    </button>
                   </div>
                   <div className="flex-1 overflow-hidden relative">
                     {rightActiveTab === "activity" && (
@@ -584,25 +601,9 @@ function WorkspaceContent() {
                         <CLIPanel logs={cliLogs} testResults={outputs.testResults} commandRecords={terminalCommands} />
                       </div>
                     )}
-                    {rightActiveTab === "docs" && (
-                      <div className="absolute inset-0 overflow-auto bg-card p-4">
-                        <h3 className="text-sm font-semibold text-foreground mb-4">
-                          Generated Documentation
-                        </h3>
-                        {outputs.documentation ? (
-                          <div className="prose prose-sm max-w-none">
-                            <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
-                              {outputs.documentation}
-                            </pre>
-                          </div>
-                        ) : (
-                          <p className="text-muted-foreground text-xs">
-                            Documentation will appear here once generated.
-                          </p>
-                        )}
-                      </div>
-                    )}
                   </div>
+
+
                 </div>
 
                 <div className="h-72 border-t border-border overflow-hidden flex flex-col shrink-0">

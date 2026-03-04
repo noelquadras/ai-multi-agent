@@ -83,29 +83,68 @@ def code_generator_node(state: AgentState) -> AgentState:
             base_model=state.get("model", "ollama"),
             bind_request_research=True
         )
-        response = _trimmed_invoke(llm, messages)
-        
-        # 1. Tool execution requested
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            # Check if it was a RequestResearch handoff
-            if response.tool_calls[0]["name"] == "RequestResearch":
-                query = response.tool_calls[0]["args"].get("query", state["requirements"])
-                return {
-                    "messages": [make_action_message(f"Requested research: {query}", ActionType.NEEDS_RESEARCH, "generate")],
-                    "events": [{
-                        "type": "research_requested",
+
+        # ── Streaming pass: show tokens in real-time ─────────────────────
+        from database import broadcast_event
+        accumulated_text = ""
+        tool_calls = []
+        try:
+            for chunk in llm.stream(messages):
+                # Collect tool calls if present
+                if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                    tool_calls.extend(chunk.tool_call_chunks)
+                token = chunk.content if hasattr(chunk, "content") else ""
+                if token:
+                    accumulated_text += token
+                    broadcast_event(state["task_id"], {
+                        "type": "code_stream",
                         "agent": "coder",
-                        "timestamp": datetime.now().isoformat(),
-                        "data": {"query": query}
-                    }]
-                }
-            return {
-                "messages": [response],
-                "iteration_count": state.get("iteration_count", 0) + 1
-            }
+                        "chunk": token,
+                        "done": False,
+                    })
+            # Signal stream end
+            broadcast_event(state["task_id"], {
+                "type": "code_stream",
+                "agent": "coder",
+                "chunk": "",
+                "done": True,
+            })
+        except Exception as stream_err:
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"Code streaming failed, falling back to invoke: {stream_err}"
+            })
+            if not accumulated_text:
+                response = _trimmed_invoke(llm, messages)
+                accumulated_text = response.content
+                if hasattr(response, "tool_calls"):
+                    tool_calls = response.tool_calls
+
+        # ── Process tool calls if any ────────────────────────────────────
+        # Reconstruct tool calls from streamed chunks
+        if tool_calls and not accumulated_text.strip():
+            # Aggregate tool call chunks into complete tool calls
+            from langchain_core.messages import AIMessageChunk
+            aggregated = AIMessageChunk(content="")
+            for tc in tool_calls:
+                aggregated = aggregated + AIMessageChunk(content="", tool_call_chunks=[tc])
+            
+            if aggregated.tool_calls:
+                first_call = aggregated.tool_calls[0]
+                if first_call["name"] == "RequestResearch":
+                    query = first_call["args"].get("query", state["requirements"])
+                    return {
+                        "messages": [make_action_message(f"Requested research: {query}", ActionType.NEEDS_RESEARCH, "generate")],
+                        "events": [{
+                            "type": "research_requested",
+                            "agent": "coder",
+                            "timestamp": datetime.now().isoformat(),
+                            "data": {"query": query}
+                        }]
+                    }
             
         # 2. Normal code generation complete
-        code = response.content
+        code = accumulated_text
         clean_code = clean_code_output(code)
         _, version_filename = save_code_version(state["task_id"], clean_code)
         
@@ -133,7 +172,6 @@ def code_generator_node(state: AgentState) -> AgentState:
             "iteration_count": state.get("iteration_count", 0) + 1,
             "make_iterations": state.get("make_iterations", 0) + 1,
             "execution_plan": exec_plan,
-            "make_iterations": state.get("make_iterations", 0) + 1,
             "events": [{
                 "type": "code_generated",
                 "agent": "coder",

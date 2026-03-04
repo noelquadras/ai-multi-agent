@@ -75,6 +75,39 @@ def spec_writer_node(state: AgentState) -> AgentState:
             extra_tools=[SpecOutput],
             bind_request_research=True
         )
+
+        # ── Streaming pass: show tokens in real-time ─────────────────────
+        from database import broadcast_event
+        accumulated_text = ""
+        try:
+            for chunk in base_llm.stream(messages):
+                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if token:
+                    accumulated_text += token
+                    broadcast_event(state["task_id"], {
+                        "type": "spec_stream",
+                        "agent": "spec_writer",
+                        "chunk": token,
+                        "done": False,
+                    })
+            # Signal stream end
+            broadcast_event(state["task_id"], {
+                "type": "spec_stream",
+                "agent": "spec_writer",
+                "chunk": "",
+                "done": True,
+            })
+        except Exception as stream_err:
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"Spec streaming failed, falling back to invoke: {stream_err}"
+            })
+            # Fallback: non-streaming invoke
+            if not accumulated_text:
+                response = base_llm.invoke(messages)
+                accumulated_text = response.content
+
+        # ── Structured parse pass ────────────────────────────────────────
         try:
             response = structured_llm.invoke(messages)
             

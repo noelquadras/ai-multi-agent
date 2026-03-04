@@ -64,7 +64,10 @@ export type TaskEvent =
   | { type: "human_message"; message: string; timestamp: string }
   | { type: "task_cancelled"; message: string; timestamp: string }
   | { type: "conversation"; message: string; timestamp: string }
-  | { type: "clarification"; message: string; timestamp: string };
+  | { type: "clarification"; message: string; timestamp: string }
+  | { type: "spec_stream"; agent: string; chunk: string; done: boolean; timestamp: string }
+  | { type: "code_stream"; agent: string; chunk: string; done: boolean; timestamp: string }
+  | { type: "review_stream"; agent: string; chunk: string; done: boolean; timestamp: string };
 
 interface ActivityPanelProps {
   events?: TaskEvent[];
@@ -110,6 +113,8 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
 
   const visibleEvents = events.filter((e) => {
     if (!showSystem && e.type === "log") return false;
+    // Hide high-frequency stream chunks from activity feed
+    if (e.type === "spec_stream" || e.type === "code_stream" || e.type === "review_stream") return false;
 
     if (activeAgent) {
       return "agent" in e && e.agent === activeAgent;
