@@ -195,6 +195,9 @@ def cli_tester_node(state: AgentState) -> AgentState:
     elif result["status"] == "exception" or result["status"] == "error":
             test_results.append("❌ Test FAILED")
             test_results.append(f"Error Type: {result.get('status').upper()}")
+            
+            if result.get("stdout"):
+                test_results.append(f"Output before error:\n{result['stdout']}")
     
             # this is the part that will show "AttributeError: 'set' object has no attribute 'count'"
             if result.get("traceback"):

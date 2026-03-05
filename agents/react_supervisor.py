@@ -342,6 +342,19 @@ def react_supervisor_node(state: AgentState) -> dict:
     events = state.get("events", [])
     recent_events = list(events[-6:])
 
+    # Inject the last message from a worker agent so the supervisor sees the result!
+    msgs = state.get("messages", [])
+    if msgs:
+        last_msg = msgs[-1]
+        sender = getattr(last_msg, "additional_kwargs", {}).get("sender", "")
+        if sender and sender != "react_supervisor":
+            action = getattr(last_msg, "additional_kwargs", {}).get("action_type", "unknown")
+            recent_events.append({
+                "type": f"agent_result ({sender})",
+                "action_type": action,
+                "message": getattr(last_msg, "content", str(last_msg))
+            })
+
     human_msgs = get_human_messages(task_id, mark_consumed=True)
     for hm in human_msgs:
         recent_events.append({"type": "human_message", "message": hm["message"]})
