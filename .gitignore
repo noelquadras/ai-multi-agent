@@ -83,3 +83,4 @@ LANGGRAPH_MIGRATION_PLAN.md
 MIGRATION_COMPLETE.md
 events_log_latest.txt
 .gitignore
+report-context.md
