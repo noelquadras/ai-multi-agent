@@ -150,6 +150,7 @@ class AgentState(TypedDict):
     # ── ReAct Supervisor State ────────────────────────────────────────
     react_plan: list[dict]
     react_plan_obj: Any
+    react_meta: Optional[dict]  # convergence protection + agent_call_counts
     working_memory: str
     artifact_registry: dict
     decision_trace: list[str]
@@ -157,6 +158,12 @@ class AgentState(TypedDict):
     last_failure_type: str
     terminate: bool
     quick_task_done: bool
+
+    # ── Review / Refine Markers (set strictly by reviewer & refiner) ──
+    # refiner_needed: True when reviewer says NEEDS_REFINE and code_refiner has NOT yet run.
+    # refiner_done:   True after code_refiner completes the requested changes.
+    refiner_needed: Optional[bool]
+    refiner_done: Optional[bool]
 
     # ── Derived Helper (Used for shorthand if needed, but Event remains source of truth) ──
     # If using these, ensures they are updated ONLY by the Manager/Supervisor.

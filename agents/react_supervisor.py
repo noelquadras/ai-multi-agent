@@ -223,11 +223,16 @@ _react_prompt = ChatPromptTemplate.from_messages(
             "1. Task IDs are auto-generated. When you see '[id=xxx]' in the plan, use that EXACT id for update/complete/reprioritize.\n"
             "2. Do NOT invent task IDs. Always reference IDs from the plan.\n"
             "3. After appending tasks, move on - call TriggerAgent to execute work. Do NOT keep re-appending or updating.\n"
-            "4. If a task is already completed, do not update it again.\n",
+            "4. If a task is already completed, do not update it again.\n"
+            "5. MARKER RULE: If 'refiner_needed=True' and 'refiner_done=False' appear in the status section, "
+               "you MUST call TriggerAgent(agent='refiner') before calling EndWorkflow or any other tool. "
+               "Ending the workflow while refiner_needed=True is a CRITICAL ERROR.\n"
+            "6. Agent call counts are shown in [Status]. Avoid calling the same agent more than necessary.\n",
         ),
         (
             "human",
-            "Time: {time}\n\nRequirement:\n{requirements}\n\nPlan:\n{plan}\n\nRecent Events:\n{events}\n\nDecide next action.",
+            "Time: {time}\n\nRequirement:\n{requirements}\n\nPlan:\n{plan}\n\n"
+            "Status:\n{status}\n\nRecent Events:\n{events}\n\nDecide next action.",
         ),
     ]
 )
@@ -352,11 +357,30 @@ def react_supervisor_node(state: AgentState) -> dict:
         f"- [id={t.task_id}] {t.description} [{t.status}] (priority={t.priority})" for t in react_plan.tasks
     ) or "No tasks yet."
 
+    # ── Load meta early so we can build status_block for the prompt ──────────
+    meta = state.get("react_meta") or {}
+    meta.setdefault("last_hash", "")
+    meta.setdefault("repeat", 0)
+    meta.setdefault("consecutive_errors", 0)
+    meta.setdefault("agent_call_counts", {})  # {agent_name: int}
+
+    # ── Marker / status block (passed into prompt) ───────────────────────
+    refiner_needed = state.get("refiner_needed", False)
+    refiner_done = state.get("refiner_done", False)
+    call_counts = meta.get("agent_call_counts", {})
+    calls_display = ", ".join(f"{k}={v}" for k, v in sorted(call_counts.items())) or "none"
+    status_block = (
+        f"refiner_needed={refiner_needed}  refiner_done={refiner_done}\n"
+        f"agent_call_counts: [{calls_display}]\n"
+        f"repeat={meta['repeat']}  consecutive_errors={meta['consecutive_errors']}"
+    )
+
     response = llm.invoke(
         _react_prompt.format_messages(
             time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             requirements=requirement,
             plan=plan_summary,
+            status=status_block,
             events=str(recent_events),
         )
     )
@@ -370,10 +394,7 @@ def react_supervisor_node(state: AgentState) -> dict:
     args = tool_call["args"]
     emit_event(task_id, {"type": "tool_call", "name": name, "args": args})
 
-    # Convergence protection
-    meta = state.get("react_meta") or {"last_hash": "", "repeat": 0, "consecutive_errors": 0}
-    if "consecutive_errors" not in meta:
-        meta["consecutive_errors"] = 0
+    # ── Convergence protection (hash the tool call after we know name+args) ──
     signature = name + json.dumps(args, sort_keys=True)
     current_hash = hashlib.md5(signature.encode()).hexdigest()
     if current_hash == meta["last_hash"]:
@@ -485,6 +506,23 @@ def react_supervisor_node(state: AgentState) -> dict:
 
         if name == "TriggerAgent":
             validated = TriggerAgent(**args)
+
+            # ── Count how many times each agent has been triggered ──────────────
+            agent_call_counts = meta.setdefault("agent_call_counts", {})
+            agent_call_counts[validated.agent] = agent_call_counts.get(validated.agent, 0) + 1
+            count = agent_call_counts[validated.agent]
+            emit_event(
+                task_id,
+                {
+                    "type": "agent_triggered",
+                    "agent": validated.agent,
+                    "call_count": count,
+                    "objective": validated.objective,
+                    "message": f"Triggering {validated.agent} (call #{count}): {validated.objective}",
+                },
+            )
+            updates["react_meta"] = meta  # persist updated counts
+
             mapping = {
                 "spec_writer": ActionType.PRD_READY,
                 "coder": ActionType.CODE_READY,
@@ -495,7 +533,7 @@ def react_supervisor_node(state: AgentState) -> dict:
             }
             updates["messages"] = [
                 make_action_message(
-                    f"Supervisor triggered {validated.agent}: {validated.objective}",
+                    f"Supervisor triggered {validated.agent} (#{count}): {validated.objective}",
                     mapping[validated.agent],
                     "react_supervisor",
                 )
@@ -503,6 +541,24 @@ def react_supervisor_node(state: AgentState) -> dict:
             return updates
 
         if name == "EndWorkflow":
+            # ── Marker guard: block premature termination ───────────────────────
+            if refiner_needed and not refiner_done:
+                guard_event = {
+                    "type": "tool_validation_error",
+                    "tool": "EndWorkflow",
+                    "errors": [
+                        "BLOCKED: refiner_needed=True but refiner_done=False. "
+                        "You MUST call TriggerAgent(agent='refiner') first to apply review changes."
+                    ],
+                    "timestamp": datetime.now().isoformat(),
+                }
+                meta["consecutive_errors"] = meta.get("consecutive_errors", 0) + 1
+                emit_event(task_id, guard_event)
+                recent_events.append(guard_event)
+                updates["events"] = list(events) + [guard_event]
+                updates["react_meta"] = meta
+                return updates
+
             updates["terminate"] = True
             summary = args.get("summary", "")
             if summary:
@@ -562,5 +618,14 @@ def react_supervisor_router(state: AgentState):
             str(ActionType.ANALYSIS_REGENERATE): "analyzer",
         }
         return mapping.get(action, "supervisor")
+
+    # Any agent (e.g. reviewer) can short-circuit directly to the refiner
+    # by emitting DECISION_REFINE without going back through the supervisor.
+    if action == str(ActionType.DECISION_REFINE):
+        return "refiner"
+
+    # Similarly, ANALYSIS_FIX from the analyzer goes straight to the refiner.
+    if action == str(ActionType.ANALYSIS_FIX):
+        return "refiner"
 
     return "supervisor"
