@@ -5,10 +5,12 @@ Decides if code needs refinement. Uses a deterministic path when structured
 review data is available; falls back to LLM only when needed.
 """
 
+from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.schemas import ReviewOutput, DecisionOutput
 from agents.llm_config import check_interrupts, get_llm, _trimmed_invoke
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event, get_task_status, update_decision_signal
 
 _decision_maker_prompt = ChatPromptTemplate.from_messages([
@@ -22,6 +24,16 @@ _decision_maker_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+# ── Thin verdict → action_type wrapper ──────────────────────────────────
+def _decision_to_action(decision: str) -> ActionType:
+    """Map a YES/NO decision verdict to the corresponding action type.
+    Routing logic lives here, NOT inside the LLM prompt."""
+    if "YES" in decision:
+        return ActionType.DECISION_REFINE
+    return ActionType.DECISION_APPROVED
+
+
+@subscribe(ActionType.REVIEW_READY, node_name="decide")
 def decision_maker_node(state: AgentState) -> AgentState:
     """
     Decide if code needs refinement.
@@ -49,6 +61,10 @@ def decision_maker_node(state: AgentState) -> AgentState:
         
         decision_output_dict = None
         
+        llm_states = state.get("agent_states", {})
+        review_state = llm_states.get("review", {})
+        gen_state = llm_states.get("generate", {})
+        
         if decision_signal == "APPROVED":
             decision = "NO"
             rationale = "Human override: APPROVED"
@@ -67,13 +83,44 @@ def decision_maker_node(state: AgentState) -> AgentState:
             })
             update_decision_signal(state["task_id"], None)
             
-        elif state.get("review_report_structured"):
+        elif review_state.get("review_report_structured"):
             # 2. Deterministic decision from structured review — NO LLM call
-            review = ReviewOutput(**state["review_report_structured"])
-            decision = "YES" if review.verdict == "NEEDS_REFINE" else "NO"
-            rationale = (f"Deterministic: verdict={review.verdict}, "
-                         f"score={review.overall_score}/10, "
-                         f"{len(review.critical_issues)} critical issue(s)")
+            review = ReviewOutput(**review_state["review_report_structured"])
+            make_iterations = state.get("make_iterations", 0)
+            score = review.overall_score
+            critical_count = len(review.critical_issues)
+
+            import hashlib
+            issues_hash = hashlib.md5(str(sorted(review.critical_issues)).encode()).hexdigest()
+
+            decide_state = llm_states.get("decide", {})
+            last_score = decide_state.get("last_review_score", 0.0)
+            last_hash = decide_state.get("last_critical_issues_hash", "")
+            convergence_counter = decide_state.get("convergence_counter", 0)
+
+            if issues_hash == last_hash and abs(score - last_score) < 1:
+                convergence_counter += 1
+            else:
+                convergence_counter = 0
+
+            # Practical approval policy
+            if convergence_counter >= 2:
+                decision = "NO"
+                rationale = "Convergence detected — approving to prevent infinite refinement."
+            elif critical_count > 0:
+                decision = "YES"
+            elif score >= 7:
+                decision = "NO"
+            elif make_iterations >= 2:
+                decision = "NO"
+            else:
+                decision = "YES"
+
+            if convergence_counter < 2:
+                rationale = (f"Deterministic: verdict={review.verdict}, "
+                             f"score={review.overall_score}/10, "
+                             f"{len(review.critical_issues)} critical issue(s)")
+
             emit_event(state["task_id"], {
                 "type": "log",
                 "message": f"⚡ Deterministic decision from structured review (no LLM call)"
@@ -81,9 +128,13 @@ def decision_maker_node(state: AgentState) -> AgentState:
         else:
             # 3. Fallback: LLM decision with structured output
             messages = _decision_maker_prompt.format_messages(
-                generated_code=state["generated_code"]
+                generated_code=gen_state.get("generated_code", "")
             )
-            llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("decision", ""))
+            llm = get_llm(
+                for_heavy_task=False, 
+                override_model=state.get("agent_models", {}).get("decision", ""),
+                base_model=state.get("model", "ollama")
+            )
             structured_llm = llm.with_structured_output(DecisionOutput)
             
             try:
@@ -112,34 +163,80 @@ def decision_maker_node(state: AgentState) -> AgentState:
                 rationale=rationale
             ).model_dump()
         
+        # ── Mutate execution_plan IN MAKE ────────────────────────────
+        import copy
+        exec_plan = copy.deepcopy(state.get("execution_plan", []))
+        
+        for step in exec_plan:
+            if step["phase"] == "MAKE":
+                if decision == "NO":
+                    step["status"] = "completed"
+                else:
+                    step["status"] = "in_progress"
+                break
+                
+        # ── Thin wrapper: verdict → action_type ────────────────────────────
+        action = _decision_to_action(decision)
+
         emit_event(state["task_id"], {
             "type": "log",
-            "message": f"Decision: {decision} — {rationale}"
+            "message": f"Decision: {decision} → {action} — {rationale}"
         })
-        
+
         emit_event(state["task_id"], {
             "type": "agent_end",
             "agent": "decision"
         })
-        
+
         emit_event(state["task_id"], {
             "type": "log",
             "message": f"[AGENT_END decision]"
         })
-        
-        return {
+
+        decide_data = {
             "decision": decision,
-            "decision_output": decision_output_dict,
-            "current_agent": "decision",
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "decision_output": decision_output_dict
         }
+        
+        try:
+            decide_data["last_review_score"] = score
+            decide_data["last_critical_issues_hash"] = issues_hash
+            decide_data["convergence_counter"] = convergence_counter
+        except NameError:
+            pass
+
+        result_state = {
+            "agent_states": {"decide": decide_data},
+            "messages": [make_action_message(
+                f"{decision}: {rationale}", action, "decide"
+            )],
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            "execution_plan": exec_plan,
+            "events": [{
+                "type": "phase_complete",
+                "phase": "MAKE"
+            }]
+        }
+        
+        if decision == "YES":
+            result_state["make_iterations"] = state.get("make_iterations", 0) + 1
+            
+        return result_state
     except Exception as e:
         emit_event(state["task_id"], {
             "type": "system_error",
             "error": f"Decision making failed: {str(e)}"
         })
         return {
-            "decision": "YES",  # Default to refinement on error
-            "error": str(e),
-            "current_agent": "decision"
+            "agent_states": {"decide": {"decision": "YES", "error": str(e)}},
+            "errors": [{
+                "type": "error",
+                "agent": "decision",
+                "timestamp": datetime.now().isoformat(),
+                "data": {"error": str(e)}
+            }],
+            "messages": [make_action_message(
+                f"Decision making failed: {str(e)}",
+                ActionType.DECISION_REFINE, "decide"
+            )]
         }

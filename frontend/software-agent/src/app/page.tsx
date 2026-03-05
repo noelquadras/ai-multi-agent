@@ -5,24 +5,15 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import {
-  Bot,
   ArrowRight,
-  Loader2,
   Cpu,
   Cloud,
-  LogIn,
-  Sun,
-  Moon,
 } from "lucide-react";
-import { UserMenu } from "@/components/auth/UserMenu";
-import { useTheme } from "@/hooks/useTheme";
 import { HistorySidebar } from "@/components/HistorySidebar";
 import {
   SidebarInset,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
 
 /* =========================
@@ -41,20 +32,19 @@ interface CrewResponse {
 import { ModelSelector, AgentModels, ModelOption } from "@/components/ModelSelector";
 
 export default function HomePage() {
-  const { toggleTheme } = useTheme();
   const router = useRouter();
-  const { data: session, status: sessionStatus } = useSession();
+  const { data: session } = useSession();
   const [localPrompt, setLocalPrompt] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string>("ollama");
+  const [selectedModel, setSelectedModel] = useState<string>("");
 
   // New state for per-agent configuration
   const [agentModels, setAgentModels] = useState<AgentModels>({
     coder: "default",
     reviewer: "default",
-    decision: "default",
     refiner: "default",
-    doc_writer: "default",
     tester: "default",
+    supervisor: "default",
+    spec_writer: "default",
   });
 
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(
@@ -149,73 +139,20 @@ export default function HomePage() {
 
   return (
     <SidebarProvider>
-      <HistorySidebar />
+      <HistorySidebar apiStatus={apiStatus} />
       <SidebarInset>
         <main className="min-h-screen bg-background text-foreground flex flex-col">
-          {/* Top Bar */}
-          <div className="h-14 border-b border-border bg-card flex items-center justify-between px-6">
-            <div className="flex items-center gap-3">
-              <SidebarTrigger />
-              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-                <Bot className="text-primary-foreground w-5 h-5" />
-              </div>
-              <span className="font-semibold text-sm">Multi-Agent AI Software Team</span>
-            </div>
-
-            <div className="flex items-center gap-4">
-
-              {sessionStatus === "authenticated" ? (
-                <UserMenu />
-              ) : sessionStatus === "unauthenticated" ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => router.push("/auth/signin")}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <LogIn className="w-4 h-4 mr-2" />
-                  Sign In
-                </Button>
-              ) : null}
-
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleTheme}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <Sun className="h-4 w-4 dark:hidden" />
-                <Moon className="h-4 w-4 hidden dark:block" />
-              </Button>
-            </div>
-          </div>
           {/* Main Content */}
-          < div className="flex-1 flex flex-col items-center pt-24 px-4" >
+          <div className="flex-1 flex flex-col items-center pt-24 px-4">
             {/* Header */}
-            < div className="flex items-center gap-3 mb-2" >
+            <div className="flex items-center gap-3 mb-2">
               <h1 className="text-3xl font-bold">Multi-Agent AI Software Team</h1>
-            </div >
+            </div>
 
             <p className="text-muted-foreground mb-8">
               Describe what you want to build. Our AI agents will generate, review,
               test, and document it.
             </p>
-
-            {/* API STATUS */}
-            <div className="mb-6">
-              {apiStatus === "online" && (
-                <Badge className="bg-green-500/20 text-green-500">API ONLINE</Badge>
-              )}
-              {apiStatus === "offline" && (
-                <Badge className="bg-red-500/20 text-red-500">API OFFLINE</Badge>
-              )}
-              {apiStatus === "checking" && (
-                <Badge className="bg-yellow-500/20 text-yellow-500">
-                  <Loader2 className="w-3 h-3 mr-2 animate-spin" />
-                  Checking API
-                </Badge>
-              )}
-            </div>
 
             {/* INPUT CARD */}
             <div className="w-full max-w-3xl bg-card border border-border rounded-xl p-4">
@@ -252,9 +189,9 @@ export default function HomePage() {
                 </Button>
               </div>
             </div>
-          </div >
+          </div>
 
-        </main >
+        </main>
       </SidebarInset>
     </SidebarProvider>
   );

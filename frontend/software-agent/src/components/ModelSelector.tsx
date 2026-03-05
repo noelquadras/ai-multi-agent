@@ -35,11 +35,12 @@ export interface ModelOption {
 export interface AgentModels {
   coder: string;
   reviewer: string;
-  decision: string;
   refiner: string;
-  doc_writer: string;
   tester: string;
+  supervisor: string;
+  spec_writer: string;
 }
+
 
 interface ModelSelectorProps {
   models: ModelOption[];
@@ -77,7 +78,7 @@ export function ModelSelector({
           disabled={disabled}
         >
           <SelectTrigger className="w-full h-12">
-            <SelectValue placeholder="Select a model" />
+            <SelectValue placeholder={models.length === 0 ? "Fetching models..." : "Select a model"} />
           </SelectTrigger>
           <SelectContent>
             {models.map((model) => (
@@ -117,7 +118,7 @@ export function ModelSelector({
                 const agent = agentKey as keyof AgentModels;
                 // Determine label based on agent key
                 const label = agent.charAt(0).toUpperCase() + agent.slice(1).replace("_", " ");
-                
+
                 return (
                   <div key={agent} className="space-y-1.5">
                     <Label className="text-xs text-muted-foreground">{label} Agent</Label>

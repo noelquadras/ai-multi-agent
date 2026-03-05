@@ -31,7 +31,8 @@ from database import (
     get_task_prompt,
     emit_event, 
     subscribers,
-    soft_delete_task
+    soft_delete_task,
+    store_human_message,
 )
 
 load_dotenv()
@@ -138,10 +139,59 @@ def _resume_graph(task_id: str):
     cancellation_registry.register(task_id)
 
     try:
-        graph = create_agent_graph(include_cli_test=True)
+        graph = create_agent_graph()
         config = {"configurable": {"thread_id": task_id}}
         # Command(resume=True) tells LangGraph to resume from the interrupt
         graph.invoke(Command(resume=True), config=config)
+
+        update_task_status(task_id, "completed")
+        emit_event(task_id, {"type": "task_completed"})
+    except RuntimeError as e:
+        if "cancelled" in str(e).lower():
+            update_task_status(task_id, "cancelled")
+            emit_event(task_id, {"type": "task_cancelled", "message": str(e)})
+        else:
+            update_task_status(task_id, "failed")
+            emit_event(task_id, {"type": "system_error", "error": str(e)})
+    except Exception as e:
+        update_task_status(task_id, "failed")
+        emit_event(task_id, {"type": "system_error", "error": str(e)})
+    finally:
+        cancellation_registry.unregister(task_id)
+        sys.stdout = old_stdout
+
+
+def _continue_graph(task_id: str, new_message: str):
+    """
+    Continue a completed/terminated workflow with a new human message.
+
+    Re-invokes the graph from the last checkpoint with reset state
+    so the supervisor re-classifies and routes the new message.
+    """
+    from main import create_agent_graph
+    from agents.cancellation import cancellation_registry
+
+    old_stdout = sys.stdout
+    sys.stdout = QueueLogger(task_id)
+    cancellation_registry.register(task_id)
+
+    try:
+        graph = create_agent_graph()
+        config = {"configurable": {"thread_id": task_id}}
+
+        # Get current state from checkpoint so we preserve context
+        current_state = graph.get_state(config)
+        prev_requirements = current_state.values.get("requirements", "") if current_state else ""
+
+        # Build updated state: reset flags, update requirements with new message
+        updated_state = {
+            "terminate": False,
+            "intent": None,
+            "quick_task_done": False,
+            "requirements": f"{prev_requirements}\n\nUser: {new_message}",
+        }
+
+        graph.invoke(updated_state, config=config)
 
         update_task_status(task_id, "completed")
         emit_event(task_id, {"type": "task_completed"})
@@ -193,14 +243,22 @@ async def task_snapshot(task_id: str):
     """Fetches full state from DB for a specific task."""
     with get_db_conn() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT status, model FROM tasks WHERE task_id = ?", (task_id,))
+        cursor.execute("SELECT status, model, prompt, created_at FROM tasks WHERE task_id = ?", (task_id,))
         task_data = cursor.fetchone()
         if not task_data: raise HTTPException(status_code=404, detail="Task not found")
         
         cursor.execute("SELECT data FROM events WHERE task_id = ? ORDER BY id ASC", (task_id,))
         events = [json.loads(row[0]) for row in cursor.fetchall()]
         
-    return {"task_id": task_id, "status": task_data[0], "model": task_data[1], "events": events}
+    return {
+        "task_id": task_id, 
+        "status": task_data[0], 
+        "model": task_data[1], 
+        "prompt": task_data[2],
+        "created_at": task_data[3],
+        "events": events
+    }
+
 
 @app.get("/api/task/{task_id}/events")
 async def stream_events(task_id: str, request: Request):
@@ -266,6 +324,38 @@ async def websocket_terminal(websocket: WebSocket, client_id: str):
     except Exception as e:
         print(f"Terminal Error: {e}")
         await websocket.close()
+
+
+@app.websocket("/ws/terminal-commands/{client_id}")
+async def websocket_terminal_commands(websocket: WebSocket, client_id: str):
+    """
+    Streams only structured command events to the frontend.
+
+    Each message is a JSON object:
+      {"type": "command_start", "command": "python main.py"}
+      {"type": "command_output", "command": "python main.py", "output": "Hello world", "exit_code": 0}
+    """
+    await websocket.accept()
+    session_id = "project_terminal_v1"
+
+    try:
+        session = terminal_manager.get_or_create_session(session_id)
+
+        async for event in session.read_command_events():
+            try:
+                await websocket.send_json(event)
+            except Exception:
+                break
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"Terminal Commands WS Error: {e}")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
 
 # --- CONTROL ROUTES ---
 
@@ -450,6 +540,41 @@ IMPORTANT USER FEEDBACK (address this as top priority):
     
     return {"task_id": new_task_id, "model": model}
 
+class HumanMessageRequest(BaseModel):
+    message: str
+
+@app.post("/api/task/{task_id}/message")
+async def post_human_message(task_id: str, body: HumanMessageRequest):
+    """Receives a human chat message and stores it for the supervisor to pick up.
+    If the task has already completed, re-enters the workflow."""
+    if not body.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    trimmed = body.message.strip()
+
+    # Persist so the supervisor can read it on the next iteration
+    store_human_message(task_id, trimmed)
+
+    # Broadcast as an SSE event so the UI confirms delivery
+    emit_event(task_id, {
+        "type": "human_message",
+        "message": trimmed,
+    })
+
+    # If the task is completed/failed, re-enter the workflow with the new message
+    task_state = get_task_status(task_id)
+    if task_state and task_state.get("status") in ("completed", "failed"):
+        update_task_status(task_id, "running")
+        emit_event(task_id, {"type": "log", "message": "Continuing workflow with new message."})
+        threading.Thread(
+            target=_continue_graph,
+            args=(task_id, trimmed),
+            daemon=True,
+        ).start()
+        return {"status": "continued"}
+
+    return {"status": "sent"}
+
 @app.post("/api/run-crew")
 async def run_crew_api(req: CrewRequest):
     task_id = f"crew_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -502,6 +627,87 @@ async def get_artifact_content(task_id: str, artifact_path: str):
         raise HTTPException(status_code=404, detail="Artifact not found")
     return {"task_id": task_id, "path": artifact_path, "content": content}
 
+
+@app.get("/api/task/{task_id}/code-versions")
+async def get_code_versions(task_id: str):
+    """Return all versioned code files for a task."""
+    from pathlib import Path
+    code_dir = Path("tasks") / task_id / "code"
+    if not code_dir.exists():
+        return {"task_id": task_id, "files": []}
+
+    files = []
+    for f in sorted(code_dir.glob("solution_v*.py")):
+        files.append({
+            "filename": f.name,
+            "content": f.read_text(encoding="utf-8"),
+        })
+    # Also include legacy solution.py if it exists
+    legacy = code_dir / "solution.py"
+    if legacy.exists():
+        files.insert(0, {
+            "filename": "solution.py",
+            "content": legacy.read_text(encoding="utf-8"),
+        })
+    return {"task_id": task_id, "files": files}
+
+
+@app.get("/api/task/{task_id}/spec")
+async def get_task_spec(task_id: str):
+    """Return the latest spec artifact for a task."""
+    from agents.artifacts import load_artifact
+    # Try the readable markdown spec first
+    content = load_artifact(task_id, "spec/spec_latest.md")
+    if content:
+        return {"task_id": task_id, "spec": content}
+    # Fallback: try the JSON design spec and format it
+    content = load_artifact(task_id, "spec/design.json")
+    if content:
+        try:
+            data = json.loads(content)
+            formatted = (
+                f"# Technical Specification\n\n"
+                f"## Implementation Approach\n{data.get('implementation_approach', '')}\n\n"
+                f"## File List\n" + "\n".join(f"- {f}" for f in data.get('file_list', [])) + "\n\n"
+                f"## Class / Function Design\n{data.get('class_design', '')}\n\n"
+                f"## Key Edge Cases\n" + "\n".join(f"- {ec}" for ec in data.get('key_edge_cases', [])) + "\n\n"
+                f"## Complexity Estimate\n{data.get('complexity_estimate', 'unknown')}\n"
+            )
+            return {"task_id": task_id, "spec": formatted}
+        except Exception:
+            return {"task_id": task_id, "spec": content}
+    return {"task_id": task_id, "spec": None}
+
+
+@app.get("/api/task/{task_id}/review")
+async def get_task_review(task_id: str):
+    """Return the latest review artifact for a task."""
+    from agents.artifacts import load_artifact
+    content = load_artifact(task_id, "reviews/review_latest.md")
+    if content:
+        return {"task_id": task_id, "review": content}
+    # Fallback: try to find the latest numbered review
+    from pathlib import Path
+    review_dir = Path("tasks") / task_id / "reviews"
+    if review_dir.exists():
+        # Find the latest review file
+        reviews = sorted(review_dir.glob("review_*.json")) + sorted(review_dir.glob("review_*.txt"))
+        if reviews:
+            latest = reviews[-1]
+            content = latest.read_text(encoding="utf-8")
+            if latest.suffix == ".json":
+                try:
+                    data = json.loads(content)
+                    from agents.schemas import ReviewOutput
+                    from agents.code_reviewer import _format_review_output
+                    formatted = _format_review_output(ReviewOutput(**data))
+                    return {"task_id": task_id, "review": formatted}
+                except Exception:
+                    return {"task_id": task_id, "review": content}
+            return {"task_id": task_id, "review": content}
+    return {"task_id": task_id, "review": None}
+
+
 @app.get("/api/models")
 async def get_available_models():
     # 1. Fetch local Ollama models
@@ -527,20 +733,35 @@ async def get_available_models():
     except Exception as e:
         print(f"Failed to fetch Ollama models: {e}")
 
-    # 2. Load static/cloud models
-    try:
-        with open("models.json", "r") as f:
-            static_models = json.load(f)
-            # Add type field to static models if missing
-            for m in static_models:
-                if "type" not in m:
-                    m["type"] = "cloud" if "Cloud" in m["name"] else "local"
-    except Exception:
-        static_models = []
+    # 2. Fetch Groq cloud models using the user's API key
+    groq_models = []
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if groq_api_key:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {groq_api_key}"},
+                    timeout=5.0,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    for model in data.get("data", []):
+                        model_id = model.get("id", "")
+                        groq_models.append({
+                            "id": model_id,
+                            "name": f"{model_id} (Groq)",
+                            "speed": "fast",
+                            "cost": "paid",
+                            "description": f"Groq cloud model: {model_id}",
+                            "type": "cloud",
+                            "owned_by": model.get("owned_by", ""),
+                        })
+        except Exception as e:
+            print(f"Failed to fetch Groq models: {e}")
 
-    # 3. Combine (local first, then static)
-    # Deduplicate by ID if needed, but usually local and static won't clash if named differently
-    return {"models": local_models + static_models}
+    # 3. Combine (local first, then Groq cloud)
+    return {"models": local_models + groq_models}
 
 if __name__ == "__main__":
     import uvicorn

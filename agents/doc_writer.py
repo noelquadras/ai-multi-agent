@@ -5,10 +5,12 @@ Generates professional markdown documentation for the final code,
 suitable for use as a README.
 """
 
+from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.artifacts import save_artifact
 from agents.llm_config import check_interrupts, get_llm, _trimmed_invoke
+from agents.action_types import ActionType, subscribe, make_action_message
 from database import emit_event
 
 _doc_writer_prompt = ChatPromptTemplate.from_messages([
@@ -31,6 +33,7 @@ _doc_writer_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+@subscribe(ActionType.ANALYSIS_PASS, node_name="document")
 def doc_writer_node(state: AgentState) -> AgentState:
     """Generate professional documentation."""
     check_interrupts(state["task_id"])
@@ -45,14 +48,24 @@ def doc_writer_node(state: AgentState) -> AgentState:
         "message": f"[AGENT_START doc_writer]"
     })
     
+    llm_states = state.get("agent_states", {})
+    gen_state = llm_states.get("generate", {})
+    refine_state = llm_states.get("refine", {})
+    
     # Use refined code if available, otherwise use generated code
-    final_code = state.get("refined_code") or state["generated_code"]
+    generated_code = gen_state.get("generated_code", "")
+    refined_code = refine_state.get("refined_code", "")
+    final_code = refined_code or generated_code
     
     messages = _doc_writer_prompt.format_messages(final_code=final_code)
     
     try:
         # Use local model for documentation (cheaper)
-        llm = get_llm(for_heavy_task=False, override_model=state.get("agent_models", {}).get("doc_writer", ""))
+        llm = get_llm(
+            for_heavy_task=False, 
+            override_model=state.get("agent_models", {}).get("doc_writer", ""),
+            base_model=state.get("model", "ollama")
+        )
         response = _trimmed_invoke(llm, messages)
         docs = response.content
         
@@ -75,9 +88,11 @@ def doc_writer_node(state: AgentState) -> AgentState:
         save_artifact(state["task_id"], "docs/README.md", docs)
         
         return {
-            "documentation": docs,
-            "current_agent": "doc_writer",
-            "messages": [response],  # new messages only
+            "agent_states": {"document": {"documentation": docs}},
+            "messages": [make_action_message(
+                f"Documentation generated ({len(docs)} chars)",
+                ActionType.DOCS_READY, "document"
+            )],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
     except Exception as e:
@@ -86,7 +101,18 @@ def doc_writer_node(state: AgentState) -> AgentState:
             "error": f"Documentation generation failed: {str(e)}"
         })
         return {
-            "documentation": "# Documentation\n\nFailed to generate documentation.",
-            "error": str(e),
-            "current_agent": "doc_writer"
+            "agent_states": {"document": {
+                "documentation": "# Documentation\n\nFailed to generate documentation.",
+                "error": str(e)
+            }},
+            "errors": [{
+                "type": "error",
+                "agent": "doc_writer",
+                "timestamp": datetime.now().isoformat(),
+                "data": {"error": str(e)}
+            }],
+            "messages": [make_action_message(
+                f"Documentation generation failed: {str(e)}",
+                ActionType.DOCS_READY, "document"
+            )]
         }

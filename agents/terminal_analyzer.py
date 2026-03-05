@@ -5,10 +5,13 @@ Analyzes raw terminal output to determine if code needs refinement
 and what specific fixes are required. Uses structured Pydantic output.
 """
 
+from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
 from agents.state import AgentState
 from agents.schemas import AnalysisOutput
 from agents.llm_config import check_interrupts, get_llm, _trimmed_invoke
+from agents.action_types import ActionType, subscribe, make_action_message
+from agents.termination import DEFAULT_TERMINATION
 from database import emit_event
 
 _terminal_analyzer_prompt = ChatPromptTemplate.from_messages([
@@ -25,6 +28,19 @@ _terminal_analyzer_prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+# ── Thin verdict → action_type wrapper ──────────────────────────────────
+def _analysis_verdict_to_action(verdict: str) -> ActionType:
+    """Map an analyzer verdict to the corresponding action type.
+    Routing logic lives here, NOT inside the LLM prompt."""
+    mapping = {
+        "PASS": ActionType.ANALYSIS_PASS,
+        "FIX_REQUIRED": ActionType.ANALYSIS_FIX,
+        "REGENERATE": ActionType.ANALYSIS_REGENERATE,
+    }
+    return mapping.get(verdict, ActionType.ANALYSIS_PASS)
+
+
+@subscribe(ActionType.TEST_COMPLETE, node_name="analyze_test")
 def terminal_analyzer_node(state: AgentState) -> AgentState:
     """
     Analyze the raw terminal output to determine if code needs refinement
@@ -42,7 +58,10 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
         "message": "[AGENT_START analyzer]"
     })
     
-    test_output = state.get("test_output", {})
+    llm_states = state.get("agent_states", {})
+    test_state = llm_states.get("test", {})
+    
+    test_output = test_state.get("test_output", {})
     returncode = test_output.get("returncode")
     stdout = test_output.get("stdout", "")
     stderr = test_output.get("stderr", "")
@@ -57,11 +76,29 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
             "type": "log",
             "message": "✅ Analyzer: Code executed successfully. No fix needed."
         })
-        return {
+        analyze_data = {
             "analysis": "PASS",
             "analysis_structured": pass_output.model_dump(),
             "decision": "NO",
-            "current_agent": "analyzer"
+            "failure_type": None
+        }
+        # ── Mutate execution_plan IN TEST (PASS) ────────────────────────────
+        import copy
+        exec_plan = copy.deepcopy(state.get("execution_plan", []))
+        for step in exec_plan:
+            if step["phase"] == "TEST":
+                step["status"] = "completed"
+                break
+                
+        return {
+            "agent_states": {"analyze_test": analyze_data},
+            "messages": [make_action_message(
+                "PASS: Code executed successfully",
+                ActionType.ANALYSIS_PASS, "analyze_test"
+            )],
+            "failure_type": None,
+            "test_iterations": state.get("test_iterations", 0) + 1,
+            "execution_plan": exec_plan
         }
     
     messages = _terminal_analyzer_prompt.format_messages(
@@ -70,27 +107,107 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
     )
     
     try:
-        llm = get_llm(for_heavy_task=True, override_model=state.get("agent_models", {}).get("analyzer", ""))
+        llm = get_llm(
+            for_heavy_task=True, 
+            override_model=state.get("agent_models", {}).get("tester", ""),
+            base_model=state.get("model", "ollama")
+        )
         structured_llm = llm.with_structured_output(AnalysisOutput)
         
         analysis_output_dict = None
         try:
             result: AnalysisOutput = structured_llm.invoke(messages)
-            analysis = f"{result.verdict}: {result.root_cause}" if result.verdict == "FIX_REQUIRED" else "PASS"
+            
+            # 1. Tool execution requested
+            if hasattr(result, "tool_calls") and result.tool_calls:
+                emit_event(state["task_id"], {
+                    "type": "log",
+                    "message": f"🧠 Analyzer requested tools: {[t['name'] for t in result.tool_calls]}"
+                })
+                return {
+                    "messages": [result]
+                }
+                
+            analysis = f"{result.verdict}: {result.root_cause}" if result.verdict == "FIX_REQUIRED" else result.verdict
             analysis_output_dict = result.model_dump()
         except Exception:
             response = _trimmed_invoke(llm, messages)
+            
+            # 1. Tool execution requested
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                emit_event(state["task_id"], {
+                    "type": "log",
+                    "message": f"🧠 Analyzer requested tools: {[t['name'] for t in response.tool_calls]}"
+                })
+                return {
+                    "messages": [response]
+                }
+                
             analysis = response.content.strip()
-        
-        emit_event(state["task_id"], {"type": "log", "message": f"🔍 Analyzer: {analysis}"})
+            # Parse verdict from raw text
+            if "REGENERATE" in analysis:
+                analysis_output_dict = {"verdict": "REGENERATE"}
+            elif "FIX_REQUIRED" in analysis:
+                analysis_output_dict = {"verdict": "FIX_REQUIRED"}
+            else:
+                analysis_output_dict = {"verdict": "PASS"}
+
+        # ── Absorb should_refine_after_analysis logic ───────────────────
+        # Check termination conditions before routing
+        verdict = (analysis_output_dict or {}).get("verdict", "PASS")
+
+        term_result = DEFAULT_TERMINATION(state)
+        if term_result.should_stop:
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"🛑 Stopping: {term_result.reason}"
+            })
+            verdict = "PASS"  # Force to docs when termination fires
+
+        # ── Thin wrapper: verdict → action_type ─────────────────────────
+        action = _analysis_verdict_to_action(verdict)
+
+        emit_event(state["task_id"], {"type": "log", "message": f"🔍 Analyzer: {analysis} → {action}"})
         emit_event(state["task_id"], {"type": "agent_end", "agent": "analyzer"})
         emit_event(state["task_id"], {"type": "log", "message": "[AGENT_END analyzer]"})
         
-        return {
+        # Map to structured failure_type for routing
+        failure_type = None
+        if verdict != "PASS":
+            err_map = {
+                "syntax": "syntax_error",
+                "runtime": "runtime_error",
+                "assertion": "logical_failure",
+                "timeout": "timeout",
+            }
+            mapped = err_map.get((analysis_output_dict or {}).get("error_type", ""), "unknown")
+            failure_type = mapped
+        
+        analyze_data = {
             "analysis": analysis,
             "analysis_structured": analysis_output_dict,
-            "current_agent": "analyzer",
-            "messages": messages
+            "failure_type": failure_type
+        }
+        
+        # ── Mutate execution_plan IN TEST ────────────────────────────
+        import copy
+        exec_plan = copy.deepcopy(state.get("execution_plan", []))
+        for step in exec_plan:
+            if step["phase"] == "TEST":
+                if verdict == "PASS":
+                    step["status"] = "completed"
+                else:
+                    step["status"] = "failed"
+                break
+                
+        return {
+            "agent_states": {"analyze_test": analyze_data},
+            "messages": [make_action_message(
+                f"{verdict}: {analysis}", action, "analyze_test"
+            )],
+            "failure_type": failure_type,
+            "test_iterations": state.get("test_iterations", 0) + 1,
+            "execution_plan": exec_plan
         }
         
     except Exception as e:
@@ -99,9 +216,22 @@ def terminal_analyzer_node(state: AgentState) -> AgentState:
             verdict="FIX_REQUIRED", error_type="runtime",
             root_cause="Analyzer failed, please check logs manually.", fix_hints=[]
         )
-        return {
+        analyze_data = {
             "analysis": "FIX_REQUIRED: Analyzer failed, please check logs manually.",
             "analysis_structured": fallback_output.model_dump(),
-            "error": str(e),
-            "current_agent": "analyzer"
+            "error": str(e)
+        }
+        return {
+            "agent_states": {"analyze_test": analyze_data},
+            "errors": [{
+                "type": "error",
+                "agent": "analyzer",
+                "timestamp": datetime.now().isoformat(),
+                "data": {"error": str(e)}
+            }],
+            "messages": [make_action_message(
+                f"Analysis failed: {str(e)}",
+                ActionType.ANALYSIS_FIX, "analyze_test"
+            )],
+            "failure_type": "unknown"
         }

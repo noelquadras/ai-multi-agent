@@ -95,6 +95,18 @@ def init_db():
             except sqlite3.OperationalError:
                 pass  # Column already exists
             
+        # Table for human chat messages sent mid-workflow
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS human_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT,
+                message TEXT,
+                consumed INTEGER DEFAULT 0,
+                timestamp TEXT,
+                FOREIGN KEY (task_id) REFERENCES tasks (task_id)
+            )
+        ''')
+
         conn.commit()
 
 def soft_delete_task(task_id: str):
@@ -202,6 +214,14 @@ def emit_event(task_id: str, event: Dict[str, Any]):
         for q in subscribers[task_id]:
             q.put_nowait(event)
 
+
+def broadcast_event(task_id: str, event: Dict[str, Any]):
+    """Push event to live UI listeners WITHOUT saving to DB (for stream chunks)."""
+    event["timestamp"] = datetime.now().isoformat()
+    if task_id in subscribers:
+        for q in subscribers[task_id]:
+            q.put_nowait(event)
+
 def get_task_prompt(task_id: str) -> Optional[str]:
     """Gets the original prompt for a task."""
     with get_db_conn() as conn:
@@ -209,3 +229,36 @@ def get_task_prompt(task_id: str) -> Optional[str]:
         cursor.execute("SELECT prompt FROM tasks WHERE task_id = ?", (task_id,))
         row = cursor.fetchone()
         return row[0] if row else None
+
+
+def store_human_message(task_id: str, message: str):
+    """Stores a human chat message for the given task."""
+    timestamp = datetime.now().isoformat()
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO human_messages (task_id, message, consumed, timestamp) VALUES (?, ?, 0, ?)",
+            (task_id, message, timestamp)
+        )
+        conn.commit()
+
+
+def get_human_messages(task_id: str, mark_consumed: bool = True) -> List[Dict[str, Any]]:
+    """Gets all unconsumed human messages for a task.
+    Optionally marks them as consumed so they aren't read twice."""
+    with get_db_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, message, timestamp FROM human_messages WHERE task_id = ? AND consumed = 0 ORDER BY id ASC",
+            (task_id,)
+        )
+        rows = cursor.fetchall()
+        messages = [{"id": r[0], "message": r[1], "timestamp": r[2]} for r in rows]
+
+        if mark_consumed and messages:
+            ids = [m["id"] for m in messages]
+            placeholders = ", ".join(["?"] * len(ids))
+            cursor.execute(f"UPDATE human_messages SET consumed = 1 WHERE id IN ({placeholders})", ids)
+            conn.commit()
+
+        return messages

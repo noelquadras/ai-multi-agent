@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { AgentPanel } from "@/components/workspace/AgentPanel";
+
 import { ActivityPanel, TaskEvent } from "@/components/workspace/ActivityPanel";
 import { CodeWorkspace } from "@/components/workspace/CodeWorkspace";
 import { CLIPanel } from "@/components/workspace/CLIPanel";
@@ -10,6 +10,8 @@ import { RejectModal } from "@/components/workspace/RejectModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import dynamic from "next/dynamic";
+import { ChatPanel } from "@/components/workspace/ChatPanel";
+import { useTerminalCommands } from "@/hooks/useTerminalCommands";
 
 const TerminalComponent = dynamic(
   () => import("@/components/Terminal").then((mod) => mod.Terminal),
@@ -23,9 +25,9 @@ import {
   X,
   Terminal,
   FileText,
-  History,
   Activity,
   StopCircle,
+  Loader2,
 } from "lucide-react";
 import { HistorySidebar } from "@/components/HistorySidebar";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
@@ -46,18 +48,24 @@ interface TaskSnapshot {
   task_id: string;
   status: "pending" | "running" | "completed" | "failed" | "paused" | "cancelled";
   model?: string;
+  prompt?: string;
+  created_at?: string;
   events: TaskEvent[];
 }
 
 interface TaskOutputs {
   code: string;
   review: string;
-  decision: string;
-  documentation: string;
   testResults: string;
 }
 
-type SidePanel = "cli" | "docs" | "terminal";
+
+interface CodeFile {
+  filename: string;
+  content: string;
+}
+
+type SidePanel = "cli" | "terminal";
 
 /* =========================
    COMPONENTS
@@ -70,18 +78,26 @@ function WorkspaceContent() {
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [taskStatus, setTaskStatus] =
     useState<TaskSnapshot["status"]>("pending");
-  const [taskModel, setTaskModel] = useState<string>("ollama");
+  const [taskModel, setTaskModel] = useState<string>("");
+  const [taskPrompt, setTaskPrompt] = useState<string>("");
+  const [taskCreatedAt, setTaskCreatedAt] = useState<string>("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [outputs, setOutputs] = useState<TaskOutputs>({
     code: "",
     review: "",
-    decision: "",
-    documentation: "",
     testResults: "",
   });
   const [cliLogs, setCliLogs] = useState<string[]>([]);
-  const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli" | "docs">("activity");
+  const [codeFiles, setCodeFiles] = useState<CodeFile[]>([]);
+  const [specFile, setSpecFile] = useState<CodeFile | null>(null);
+  const [reviewFile, setReviewFile] = useState<CodeFile | null>(null);
+  const [streamingFile, setStreamingFile] = useState<string | null>(null);
+  const [streamingContent, setStreamingContent] = useState<string>("");
+  const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli">("activity");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+
+  // Structured command events from the terminal WebSocket
+  const { commands: terminalCommands } = useTerminalCommands();
 
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -91,6 +107,13 @@ function WorkspaceContent() {
   ========================= */
 
   const AGENT_REGISTRY: Record<string, AgentStatus> = {
+    supervisor: {
+      id: "supervisor",
+      name: "Supervisor",
+      role: "Manager",
+      status: "idle",
+      progress: 0,
+    },
     spec_writer: {
       id: "spec_writer",
       name: "Spec Writer",
@@ -112,13 +135,6 @@ function WorkspaceContent() {
       status: "idle",
       progress: 0,
     },
-    decision: {
-      id: "decision",
-      name: "Decision",
-      role: "Auditor",
-      status: "idle",
-      progress: 0,
-    },
     refiner: {
       id: "refiner",
       name: "Refiner",
@@ -130,13 +146,6 @@ function WorkspaceContent() {
       id: "tester",
       name: "Tester",
       role: "CLI Testing",
-      status: "idle",
-      progress: 0,
-    },
-    doc_writer: {
-      id: "doc_writer",
-      name: "Doc Writer",
-      role: "Documentation",
       status: "idle",
       progress: 0,
     },
@@ -181,20 +190,67 @@ function WorkspaceContent() {
 
     if (event.type === "code_output" && event.code) {
       setOutputs((prev) => ({ ...prev, code: event.code }));
+      setStreamingFile(null);
+      setStreamingContent("");
+      // Add the new version to the codeFiles list
+      const filename = (event as any).filename || "code.py";
+      setCodeFiles((prev) => {
+        // Avoid duplicates
+        if (prev.some((f) => f.filename === filename)) return prev;
+        return [...prev, { filename, content: event.code }];
+      });
       setRightActiveTab("activity");
     }
     if (event.type === "review_output" && event.review) {
       setOutputs((prev) => ({ ...prev, review: event.review }));
+      setReviewFile({ filename: "review.md", content: event.review });
+      setStreamingFile(null);
+      setStreamingContent("");
       setRightActiveTab("activity");
     }
-    if (event.type === "decision_output" && event.decision) {
-      setOutputs((prev) => ({ ...prev, decision: event.decision }));
+    if (event.type === "spec_output" && event.spec) {
+      setSpecFile({ filename: "spec.md", content: event.spec });
+      setStreamingFile(null);
+      setStreamingContent("");
       setRightActiveTab("activity");
     }
-    if (event.type === "doc_output" && event.documentation) {
-      setOutputs((prev) => ({ ...prev, documentation: event.documentation }));
-      setRightActiveTab("docs");
+
+    // ── Streaming events ────────────────────────────────────────
+    if (event.type === "spec_stream") {
+      if (event.done) {
+        // Stream ended — final spec_output event will commit the file
+      } else {
+        setStreamingFile((prev) => {
+          if (prev !== "spec.md") setStreamingContent("");
+          return "spec.md";
+        });
+        setStreamingContent((prev) => prev + (event.chunk || ""));
+      }
     }
+    if (event.type === "code_stream") {
+      if (event.done) {
+        setStreamingFile(null);
+        setStreamingContent("");
+      } else {
+        setStreamingFile((prev) => {
+          if (prev !== "generating...") setStreamingContent("");
+          return "generating...";
+        });
+        setStreamingContent((prev) => prev + (event.chunk || ""));
+      }
+    }
+    if (event.type === "review_stream") {
+      if (event.done) {
+        // Stream ended — final review_output event will commit the file
+      } else {
+        setStreamingFile((prev) => {
+          if (prev !== "review.md") setStreamingContent("");
+          return "review.md";
+        });
+        setStreamingContent((prev) => prev + (event.chunk || ""));
+      }
+    }
+
     if (event.type === "test_output" && event.results) {
       setOutputs((prev) => ({ ...prev, testResults: event.results }));
       setRightActiveTab("cli");
@@ -237,6 +293,8 @@ function WorkspaceContent() {
       const data: TaskSnapshot = await res.json();
       setTaskStatus(data.status);
       setTaskModel(data.model || "ollama");
+      setTaskPrompt(data.prompt || "");
+      setTaskCreatedAt(data.created_at || "");
       // Pre-apply historical events to the UI
       if (data.events) {
         data.events.forEach(applyEvent);
@@ -255,11 +313,47 @@ function WorkspaceContent() {
     setOutputs({
       code: "",
       review: "",
-      decision: "",
-      documentation: "",
       testResults: "",
     });
     setCliLogs([]);
+    setCodeFiles([]);
+    setSpecFile(null);
+    setReviewFile(null);
+    setTaskPrompt("");
+    setTaskCreatedAt("");
+
+    // Fetch existing code versions from disk
+    fetch(`http://localhost:8000/api/task/${taskId}/code-versions`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.files && data.files.length > 0) {
+          setCodeFiles(data.files);
+          // Set the latest code as output
+          const latest = data.files[data.files.length - 1];
+          setOutputs((prev) => ({ ...prev, code: latest.content }));
+        }
+      })
+      .catch(() => { });
+
+    // Fetch latest spec from disk
+    fetch(`http://localhost:8000/api/task/${taskId}/spec`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.spec) {
+          setSpecFile({ filename: "spec.md", content: data.spec });
+        }
+      })
+      .catch(() => { });
+
+    // Fetch latest review from disk
+    fetch(`http://localhost:8000/api/task/${taskId}/review`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.review) {
+          setReviewFile({ filename: "review.md", content: data.review });
+        }
+      })
+      .catch(() => { });
 
     // Initial fetch to sync with DB
     refreshStatus(taskId);
@@ -364,18 +458,15 @@ function WorkspaceContent() {
   };
 
   return (
-    <SidebarProvider>
-      <HistorySidebar />
+    <SidebarProvider defaultOpen={false}>
+      <HistorySidebar agents={agents} />
       <SidebarInset>
         <div className="flex h-screen bg-background overflow-hidden">
-          <div className="hidden md:block flex-none">
-            <AgentPanel agents={agents} />
-          </div>
 
           <div className="flex flex-1 flex-col overflow-hidden">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
               <div className="flex items-center gap-3">
-                <SidebarTrigger />
+                <div className="w-1" />
                 <Badge className={getStatusColor()}>
                   {taskStatus.toUpperCase()}
                 </Badge>
@@ -383,7 +474,15 @@ function WorkspaceContent() {
                   variant="outline"
                   className="border-border text-muted-foreground text-xs"
                 >
-                  {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
+                  {!taskModel ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Loading...
+                    </span>
+                  ) : taskModel.toLowerCase().includes("groq") || taskModel.includes("-") ? (
+                    `🚀 ${taskModel}`
+                  ) : (
+                    `🦙 ${taskModel}`
+                  )}
                 </Badge>
               </div>
 
@@ -451,83 +550,82 @@ function WorkspaceContent() {
             </div>
 
             <div className="flex flex-1 overflow-hidden">
+              <div className="w-[350px] border-r border-border shrink-0 flex flex-col overflow-hidden">
+                <ChatPanel
+                  taskId={taskId}
+                  events={events}
+                  initialPrompt={taskPrompt}
+                  initialTimestamp={taskCreatedAt}
+                  onSendMessage={async (message) => {
+                    try {
+                      await fetch(`http://localhost:8000/api/task/${taskId}/message`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ message }),
+                      });
+                    } catch (err) {
+                      console.error("Failed to send message:", err);
+                    }
+                  }}
+                  isLoading={taskStatus === "running"}
+                />
+              </div>
+
               <div className="flex-1 overflow-hidden">
-                <CodeWorkspace code={outputs.code} isReadOnly />
+                <CodeWorkspace code={outputs.code} codeFiles={codeFiles} specFile={specFile} reviewFile={reviewFile} streamingFile={streamingFile} streamingContent={streamingContent} isReadOnly />
               </div>
 
               <div className="hidden xl:flex flex-col border-l border-border w-[450px]">
-                <div className="flex border-b border-border bg-card">
-                  <button
-                    onClick={() => setRightActiveTab("activity")}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "activity"
-                      ? "bg-muted text-foreground border-b-2 border-purple-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <Activity className="w-3.5 h-3.5" /> Activity
-                  </button>
-                  <button
-                    onClick={() => setRightActiveTab("cli")}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "cli"
-                      ? "bg-muted text-foreground border-b-2 border-green-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <Terminal className="w-3.5 h-3.5" /> CLI Tests
-                    {cliLogs.length > 0 && (
-                      <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setRightActiveTab("docs")}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "docs"
-                      ? "bg-muted text-foreground border-b-2 border-blue-500"
-                      : "text-muted-foreground hover:text-foreground"
-                      }`}
-                  >
-                    <FileText className="w-3.5 h-3.5" /> Docs
-                  </button>
-                </div>
-                <div className="flex-1 overflow-hidden relative">
-                  {rightActiveTab === "activity" && (
-                    <ActivityPanel events={events} />
-                  )}
-                  {rightActiveTab === "cli" && (
-                    <div className="absolute inset-0 overflow-hidden">
-                      <CLIPanel logs={cliLogs} testResults={outputs.testResults} />
-                    </div>
-                  )}
-                  {rightActiveTab === "docs" && (
-                    <div className="absolute inset-0 overflow-auto bg-card p-4">
-                      <h3 className="text-sm font-semibold text-foreground mb-4">
-                        Generated Documentation
-                      </h3>
-                      {outputs.documentation ? (
-                        <div className="prose prose-sm max-w-none">
-                          <pre className="whitespace-pre-wrap text-xs text-muted-foreground font-mono">
-                            {outputs.documentation}
-                          </pre>
-                        </div>
-                      ) : (
-                        <p className="text-muted-foreground text-xs">
-                          Documentation will appear here once generated.
-                        </p>
+                <div className="flex-1 flex flex-col min-h-0">
+                  <div className="flex border-b border-border bg-card">
+                    <button
+                      onClick={() => setRightActiveTab("activity")}
+                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "activity"
+                        ? "bg-muted text-foreground border-b-2 border-purple-500"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <Activity className="w-3.5 h-3.5" /> Activity
+                    </button>
+
+                    <button
+                      onClick={() => setRightActiveTab("cli")}
+                      className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium ${rightActiveTab === "cli"
+                        ? "bg-muted text-foreground border-b-2 border-green-500"
+                        : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                      <Terminal className="w-3.5 h-3.5" /> CLI Tests
+                      {cliLogs.length > 0 && (
+                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
                       )}
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-hidden relative">
+                    {rightActiveTab === "activity" && (
+                      <ActivityPanel events={events} />
+                    )}
+                    {rightActiveTab === "cli" && (
+                      <div className="absolute inset-0 overflow-hidden">
+                        <CLIPanel logs={cliLogs} testResults={outputs.testResults} commandRecords={terminalCommands} />
+                      </div>
+                    )}
+                  </div>
+
+
+                </div>
+
+                <div className="h-72 border-t border-border overflow-hidden flex flex-col shrink-0">
+                  <div className="flex border-b border-border bg-card px-4 py-2">
+                    <div className="flex items-center gap-2 text-sm text-foreground font-medium">
+                      <Terminal className="w-4 h-4" /> Terminal
                     </div>
-                  )}
-                </div>
-              </div>
-            </div>
+                  </div>
 
-            <div className="h-72 border-t border-border overflow-hidden flex flex-col">
-              <div className="flex border-b border-border bg-card px-4 py-2">
-                <div className="flex items-center gap-2 text-sm text-foreground font-medium">
-                  <Terminal className="w-4 h-4" /> Terminal
+                  <div className="flex-1 overflow-hidden bg-[#1a1b26]">
+                    <TerminalComponent className="h-full w-full" />
+                  </div>
                 </div>
-              </div>
-
-              <div className="flex-1 overflow-hidden bg-[#1a1b26]">
-                <TerminalComponent className="h-full w-full" />
               </div>
             </div>
           </div>

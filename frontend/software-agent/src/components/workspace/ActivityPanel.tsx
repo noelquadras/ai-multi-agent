@@ -39,8 +39,10 @@ export type TaskEvent =
   }
   | { type: "system_error"; error: string; timestamp: string }
   | { type: "log"; message: string; timestamp: string }
-  | { type: "code_output"; agent: string; code: string; timestamp: string }
-  | { type: "review_output"; agent: string; review: string; timestamp: string }
+  | { type: "tool_call"; name: any; args: any; timestamp: string }
+  | { type: "code_output"; agent: string; code: string; timestamp: string; filename?: string }
+  | { type: "spec_output"; agent: string; spec: string; timestamp: string; filename?: string }
+  | { type: "review_output"; agent: string; review: string; timestamp: string; filename?: string }
   | {
     type: "decision_output";
     agent: string;
@@ -59,7 +61,13 @@ export type TaskEvent =
   | { type: "task_paused"; message: string; timestamp: string }
   | { type: "task_resumed"; message: string; timestamp: string }
   | { type: "human_approval"; approved: boolean; message: string; timestamp: string }
-  | { type: "task_cancelled"; message: string; timestamp: string };
+  | { type: "human_message"; message: string; timestamp: string }
+  | { type: "task_cancelled"; message: string; timestamp: string }
+  | { type: "conversation"; message: string; timestamp: string }
+  | { type: "clarification"; message: string; timestamp: string }
+  | { type: "spec_stream"; agent: string; chunk: string; done: boolean; timestamp: string }
+  | { type: "code_stream"; agent: string; chunk: string; done: boolean; timestamp: string }
+  | { type: "review_stream"; agent: string; chunk: string; done: boolean; timestamp: string };
 
 interface ActivityPanelProps {
   events?: TaskEvent[];
@@ -105,6 +113,8 @@ export function ActivityPanel({ events = [] }: ActivityPanelProps) {
 
   const visibleEvents = events.filter((e) => {
     if (!showSystem && e.type === "log") return false;
+    // Hide high-frequency stream chunks from activity feed
+    if (e.type === "spec_stream" || e.type === "code_stream" || e.type === "review_stream") return false;
 
     if (activeAgent) {
       return "agent" in e && e.agent === activeAgent;
@@ -212,8 +222,8 @@ function AgentFilterButton({
     <button
       onClick={onClick}
       className={`px-2 py-1 text-[10px] rounded border transition-colors whitespace-nowrap ${active
-          ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
-          : "bg-card text-zinc-500 border-zinc-800 hover:text-zinc-300"
+        ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
+        : "bg-card text-zinc-500 border-zinc-800 hover:text-zinc-300"
         }`}
     >
       {label}
@@ -275,6 +285,13 @@ function EventRow({ event }: { event: TaskEvent }) {
       message = "completed code review";
       break;
 
+    case "spec_output":
+      color = "text-emerald-400";
+      label = event.agent;
+      icon = <FileText className="w-3 h-3" />;
+      message = "generated technical specification";
+      break;
+
     case "decision_output":
       color = "text-purple-400";
       label = event.agent;
@@ -331,6 +348,12 @@ function EventRow({ event }: { event: TaskEvent }) {
       message = event.message;
       break;
 
+    case "human_message":
+      color = "text-blue-400";
+      label = "Human";
+      message = event.message;
+      break;
+
     case "log":
       message = event.message;
       break;
@@ -339,6 +362,18 @@ function EventRow({ event }: { event: TaskEvent }) {
       color = "text-orange-500";
       icon = <StopCircle className="w-3 h-3" />;
       message = event.message || "Task cancelled by user";
+      break;
+
+    case "conversation":
+      color = "text-violet-400";
+      label = "Supervisor";
+      message = event.message;
+      break;
+
+    case "clarification":
+      color = "text-amber-400";
+      label = "Supervisor";
+      message = `❓ ${event.message}`;
       break;
   }
 

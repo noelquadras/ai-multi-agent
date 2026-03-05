@@ -33,6 +33,8 @@ async def _execute_impl(code: str, timeout_seconds: int):
     # Create wrapper script which sets up sandboxing then execs user code
     wrapper = f'''
 import json, sys, builtins, io, traceback, os
+import threading
+import _thread
 
 # Add workspace root to sys.path
 if {repr(workspace_root)} not in sys.path:
@@ -44,10 +46,11 @@ USER_CODE = {repr(code)}
 # Hardened Disabled Functions
 # ----------------------------
 def disabled_input(*args, **kwargs):
-    # Instead of raising an error that can be caught in a loop, 
-    # we print a message and FORCE EXIT the process.
-    sys.stderr.write("SANDBOX_ERROR: input() is not allowed\\n")
-    os._exit(1) 
+    # Instead of raising an error that can be caught by a generic Exception block,
+    # we raise a custom BaseException so it bypasses normal catch blocks 
+    # but still allows the finally block to execute and return JSON.
+    class SandboxInputError(BaseException): pass
+    raise SandboxInputError("SANDBOX_ERROR: input() is not allowed in automated testing. Please mock input() using unittest.mock or provide predefined inputs.")
 
 builtins.input = disabled_input
 # Do the same for open if you want it strictly disabled
@@ -66,6 +69,17 @@ result = {{
     "traceback": None,
 }}
 
+# Setup a hard timeout using a background thread that interrupts main
+def timeout_handler():
+    # Only interrupt if we haven't finished execution
+    _thread.interrupt_main()
+
+# Give the internal timeout 0.5s less than the external timeout to cleanly return JSON
+internal_timeout = max(1.0, float({timeout_seconds}) - 0.5)
+timer = threading.Timer(internal_timeout, timeout_handler)
+timer.daemon = True
+timer.start()
+
 try:
     exec(USER_CODE, {{'__builtins__': builtins}}, {{}})
     result["status"] = "success"
@@ -73,17 +87,24 @@ try:
 except SystemExit as e:
     result["returncode"] = e.code if isinstance(e.code, int) else 0
     result["status"] = "success" if result["returncode"] == 0 else "error"
+except KeyboardInterrupt:
+    # This is triggered by our timer!
+    result["status"] = "timeout"
+    result["returncode"] = None
+    result["stderr"] = f"Execution timed out after {{internal_timeout}} seconds"
 except BaseException:
     result["traceback"] = traceback.format_exc()
     result["status"] = "exception"
 finally:
+    timer.cancel()
     # RESTORE and PRINT JSON no matter what
     final_stdout = out_buf.getvalue()
     final_stderr = err_buf.getvalue()
     sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
     
     result["stdout"] = final_stdout
-    result["stderr"] = final_stderr
+    if not result["stderr"]:
+        result["stderr"] = final_stderr
     # Adding markers to help the Regex find the JSON
     print(f"__START_JSON__\\n{{json.dumps(result)}}\\n__END_JSON__")
 '''
