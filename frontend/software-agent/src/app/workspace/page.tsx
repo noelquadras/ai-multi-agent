@@ -458,7 +458,7 @@ function WorkspaceContent() {
   };
 
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={false}>
       <HistorySidebar agents={agents} />
       <SidebarInset>
         <div className="flex h-screen bg-background overflow-hidden">
@@ -466,7 +466,7 @@ function WorkspaceContent() {
           <div className="flex flex-1 flex-col overflow-hidden">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border bg-card">
               <div className="flex items-center gap-3">
-                <SidebarTrigger />
+                <div className="w-1" />
                 <Badge className={getStatusColor()}>
                   {taskStatus.toUpperCase()}
                 </Badge>

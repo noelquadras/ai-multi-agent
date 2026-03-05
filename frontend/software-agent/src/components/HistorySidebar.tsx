@@ -170,14 +170,20 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
   };
 
   return (
-    <Sidebar side="left" variant="sidebar" collapsible="icon">
+    <Sidebar
+      side="left"
+      variant="sidebar"
+      collapsible="icon"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
       {/* ── Header ── */}
       <SidebarHeader className="border-b border-border px-3 py-3">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild tooltip="Home">
               <Link href="/">
-                <div className="w-8 h-8 bg-gradient-to-br from-purple-600 to-blue-600 rounded-lg flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 bg-linear-to-br from-purple-600 to-blue-600 rounded-lg flex items-center justify-center shrink-0">
                   <Bot className="text-white w-4 h-4" />
                 </div>
                 <div className="flex flex-col gap-0.5 leading-none">
@@ -406,7 +412,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
-      <SidebarRail />
+      {/* SidebarRail removed to stop toggle behavior */}
     </Sidebar>
   );
 }
