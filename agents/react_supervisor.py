@@ -84,6 +84,31 @@ def ensure_task_object(obj: Any) -> TaskItem:
     return TaskItem(description="Complete task")
 
 
+def _resolve_task_id(task: TaskItem, react_plan: "ReactPlan") -> TaskItem:
+    """If the task's auto-generated id isn't in the plan, try to match by description.
+
+    The LLM frequently forgets to pass the task_id when calling complete/update,
+    so TaskItem auto-generates a fresh UUID that will never be in the plan.  We
+    detect this case and substitute the real id from the plan.
+    """
+    existing_ids = {t.task_id for t in react_plan.tasks}
+    if task.task_id in existing_ids:
+        return task  # Already correct – nothing to do.
+
+    # Try exact description match first, then case-insensitive.
+    desc_lower = task.description.strip().lower()
+    for t in react_plan.tasks:
+        if t.description.strip().lower() == desc_lower:
+            return task.model_copy(update={"task_id": t.task_id})
+
+    # Fuzzy fallback: use the first task whose description *contains* the LLM's description.
+    for t in react_plan.tasks:
+        if desc_lower in t.description.strip().lower() or t.description.strip().lower() in desc_lower:
+            return task.model_copy(update={"task_id": t.task_id})
+
+    return task  # Return as-is; validation will correctly report the error.
+
+
 def ensure_plan_object(obj: Any) -> ReactPlan:
     if isinstance(obj, ReactPlan):
         return obj
@@ -380,17 +405,34 @@ def react_supervisor_node(state: AgentState) -> dict:
                 )
                 return updates
 
+            # If the LLM didn't supply a matching task_id (it auto-generated a new
+            # UUID via TaskItem's default_factory), resolve it from the plan by
+            # description before running validation.
+            if validated.action in ("complete", "update", "reprioritize"):
+                resolved_task = _resolve_task_id(validated.task, react_plan)
+                if resolved_task.task_id != validated.task.task_id:
+                    emit_event(
+                        task_id,
+                        {
+                            "type": "log",
+                            "message": f"Auto-resolved task_id '{validated.task.task_id}' -> '{resolved_task.task_id}' by description match.",
+                        },
+                    )
+                    validated = validated.model_copy(update={"task": resolved_task})
+
             validation_result = validated.validate_action(react_plan)
             if not validation_result["is_valid"]:
                 meta["consecutive_errors"] = meta.get("consecutive_errors", 0) + 1
-                emit_event(
-                    task_id,
-                    {
-                        "type": "tool_validation_error",
-                        "tool": "PlannerTool",
-                        "errors": validation_result["errors"],
-                    },
-                )
+                error_event = {
+                    "type": "tool_validation_error",
+                    "tool": "PlannerTool",
+                    "errors": validation_result["errors"],
+                    "timestamp": datetime.now().isoformat(),
+                }
+                emit_event(task_id, error_event)
+                # Feed the error back into recent_events so the LLM sees valid IDs
+                recent_events.append(error_event)
+                updates["events"] = list(events) + [error_event]
                 updates["react_meta"] = meta
                 return updates
 
