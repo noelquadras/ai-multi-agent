@@ -78,7 +78,7 @@ export function ModelSelector({
           disabled={disabled}
         >
           <SelectTrigger className="w-full h-12">
-            <SelectValue placeholder="Select a model" />
+            <SelectValue placeholder={models.length === 0 ? "Fetching models..." : "Select a model"} />
           </SelectTrigger>
           <SelectContent>
             {models.map((model) => (

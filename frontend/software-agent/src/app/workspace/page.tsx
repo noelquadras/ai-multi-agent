@@ -27,6 +27,7 @@ import {
   FileText,
   Activity,
   StopCircle,
+  Loader2,
 } from "lucide-react";
 import { HistorySidebar } from "@/components/HistorySidebar";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
@@ -77,7 +78,7 @@ function WorkspaceContent() {
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [taskStatus, setTaskStatus] =
     useState<TaskSnapshot["status"]>("pending");
-  const [taskModel, setTaskModel] = useState<string>("ollama");
+  const [taskModel, setTaskModel] = useState<string>("");
   const [taskPrompt, setTaskPrompt] = useState<string>("");
   const [taskCreatedAt, setTaskCreatedAt] = useState<string>("");
   const [agents, setAgents] = useState<AgentStatus[]>([]);
@@ -473,7 +474,15 @@ function WorkspaceContent() {
                   variant="outline"
                   className="border-border text-muted-foreground text-xs"
                 >
-                  {taskModel === "groq" ? "🚀 Groq 70B" : "🦙 Ollama Local"}
+                  {!taskModel ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Loading...
+                    </span>
+                  ) : taskModel.toLowerCase().includes("groq") || taskModel.includes("-") ? (
+                    `🚀 ${taskModel}`
+                  ) : (
+                    `🦙 ${taskModel}`
+                  )}
                 </Badge>
               </div>
 

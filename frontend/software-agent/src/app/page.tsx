@@ -35,7 +35,7 @@ export default function HomePage() {
   const router = useRouter();
   const { data: session } = useSession();
   const [localPrompt, setLocalPrompt] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string>("ollama");
+  const [selectedModel, setSelectedModel] = useState<string>("");
 
   // New state for per-agent configuration
   const [agentModels, setAgentModels] = useState<AgentModels>({
