@@ -16,7 +16,7 @@ from agents.nodes import (
     terminal_analyzer_node,
     set_model_config,
 )
-from agents.react_supervisor import react_supervisor_node, react_supervisor_router
+from agents.react_supervisor import react_supervisor_node as _react_supervisor_node, react_supervisor_router
 from database import emit_event
 
 load_dotenv()
@@ -26,6 +26,15 @@ _checkpointer = SqliteSaver(conn=_db_conn)
 
 _llm_retry = RetryPolicy(max_attempts=3)
 
+
+def react_supervisor_node(state: AgentState) -> dict:
+    task_id = state.get("task_id", "unknown")
+    emit_event(task_id, {"type": "agent_start", "agent": "supervisor"})
+    emit_event(task_id, {"type": "log", "message": "[AGENT_START supervisor]"})
+    result = _react_supervisor_node(state)
+    emit_event(task_id, {"type": "log", "message": "[AGENT_END supervisor]"})
+    emit_event(task_id, {"type": "agent_end", "agent": "supervisor"})
+    return result
 
 def create_agent_graph():
 
