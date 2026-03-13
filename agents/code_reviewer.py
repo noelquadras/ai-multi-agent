@@ -155,18 +155,46 @@ def code_reviewer_node(state: AgentState) -> AgentState:
             "filename": "review.md"
         })
 
-        review_summary = f"Review: score={review_output_dict['overall_score']}/10, verdict={review_output_dict['verdict']}" if review_output_dict else f"Review: {len(review)} chars (raw)"
-        
         review_data = {
             "review_report": review,
             "review_report_structured": review_output_dict
         }
         
+        # Route directly to refiner when structured verdict says NEEDS_REFINE;
+        # otherwise surface to supervisor as REVIEW_READY (approve / raw fallback).
+        verdict = (review_output_dict or {}).get("verdict", "APPROVE")
+        if verdict == "NEEDS_REFINE":
+            next_action = ActionType.DECISION_REFINE
+            review_summary = (
+                f"Review NEEDS_REFINE — score={review_output_dict['overall_score']}/10, "
+                f"{len(review_output_dict.get('critical_issues', []))} critical issues → calling refiner"
+            )
+            # ── MARKER: refiner_needed ────────────────────────────────────────────
+            # Raised here; cleared only after code_refiner_node completes.
+            emit_event(state["task_id"], {
+                "type": "refiner_needed",
+                "message": "Review verdict is NEEDS_REFINE. code_refiner MUST be called before ending.",
+                "critical_issues": (review_output_dict or {}).get("critical_issues", []),
+                "score": (review_output_dict or {}).get("overall_score"),
+            })
+            refiner_needed_flag = True
+        else:
+            next_action = ActionType.REVIEW_READY
+            review_summary = (
+                f"Review APPROVED — score={review_output_dict['overall_score']}/10"
+                if review_output_dict
+                else f"Review: {len(review)} chars (raw)"
+            )
+            refiner_needed_flag = False
+        
         return {
             "agent_states": {"review": review_data},
-            "messages": [make_action_message(review_summary, ActionType.REVIEW_READY, "review")],
+            "messages": [make_action_message(review_summary, next_action, "review")],
             "iteration_count": state.get("iteration_count", 0) + 1,
-            "confidence_score": (review_output_dict.get("overall_score", 0) / 10.0) if review_output_dict else 0.5
+            "confidence_score": (review_output_dict.get("overall_score", 0) / 10.0) if review_output_dict else 0.5,
+            # ── MARKERS ─────────────────────────────────────────────────────────────────
+            "refiner_needed": refiner_needed_flag,  # True = refiner must run
+            "refiner_done": False,                  # reset: new review cycle
         }
     except Exception as e:
         emit_event(state["task_id"], {

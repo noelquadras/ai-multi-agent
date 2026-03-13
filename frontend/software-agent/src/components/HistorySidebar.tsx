@@ -65,7 +65,7 @@ export interface SidebarAgent {
   id: string;
   name: string;
   role: string;
-  status: "idle" | "thinking" | "approved" | "error";
+  status: "idle" | "running" | "completed" | "error" | "stopped";
   message?: string;
 }
 
@@ -104,12 +104,14 @@ function getRelativeTime(dateString: string): string {
 
 function getStatusIcon(status: SidebarAgent["status"]) {
   switch (status) {
-    case "thinking":
+    case "running":
       return <Loader2 className="w-3 h-3 text-blue-500 animate-spin" />;
-    case "approved":
+    case "completed":
       return <CheckCircle2 className="w-3 h-3 text-green-500" />;
     case "error":
       return <AlertCircle className="w-3 h-3 text-red-500" />;
+    case "stopped":
+      return <Clock className="w-3 h-3 text-yellow-500" />;
     default:
       return <Circle className="w-2.5 h-2.5 text-zinc-600" />;
   }
@@ -133,7 +135,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
   const [loading, setLoading] = useState(true);
 
   const activeCount =
-    agents?.filter((a) => a.status === "thinking").length ?? 0;
+    agents?.filter((a) => a.status === "running").length ?? 0;
 
   useEffect(() => {
     if (open) {
@@ -221,7 +223,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
                       tooltip={`${agent.name} — ${agent.status}`}
                       className={cn(
                         "h-auto py-2",
-                        agent.status === "thinking" &&
+                        agent.status === "running" &&
                         "bg-purple-500/5 border border-purple-500/20"
                       )}
                     >
@@ -229,7 +231,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
                       <div
                         className={cn(
                           "w-7 h-7 rounded-md flex items-center justify-center shrink-0 border",
-                          agent.status === "thinking"
+                          agent.status === "running"
                             ? "bg-purple-500/10 border-purple-500/30 text-purple-500"
                             : "bg-muted border-border text-muted-foreground"
                         )}
@@ -244,7 +246,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
                         <span
                           className={cn(
                             "text-xs font-medium truncate",
-                            agent.status === "thinking"
+                            agent.status === "running"
                               ? "text-foreground"
                               : "text-muted-foreground"
                           )}
@@ -256,9 +258,10 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
                           <span
                             className={cn(
                               "text-[9px] uppercase font-bold tracking-wider",
-                              agent.status === "thinking" && "text-blue-500",
-                              agent.status === "approved" && "text-green-500",
+                              agent.status === "running" && "text-blue-500",
+                              agent.status === "completed" && "text-green-500",
                               agent.status === "error" && "text-red-500",
+                              agent.status === "stopped" && "text-yellow-500",
                               agent.status === "idle" && "text-zinc-500"
                             )}
                           >

@@ -81,7 +81,8 @@ timer.daemon = True
 timer.start()
 
 try:
-    exec(USER_CODE, {{'__builtins__': builtins}}, {{}})
+    exec_env = {{'__builtins__': builtins, '__name__': '__main__'}}
+    exec(USER_CODE, exec_env)
     result["status"] = "success"
     result["returncode"] = 0
 except SystemExit as e:

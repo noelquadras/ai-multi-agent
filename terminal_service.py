@@ -66,7 +66,7 @@ class TerminalSession:
         data = re.sub(r';\s*Write-Host\s+"__AGENT_DONE__.*', '', data)
 
         # Remove the execution output of the marker itself
-        data = re.sub(r'__AGENT_DONE__RUN_\w+\s+(-?\d+)?\r?\n?', '', data)
+        data = re.sub(r'__AGENT_DONE___RUN_\w+\s+(-?\d+)?\r?\n?', '', data)
 
         return data
 

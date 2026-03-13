@@ -11,7 +11,7 @@ interface BackendAgent {
   id: string;
   name: string;
   role: string;
-  status: "idle" | "thinking" | "approved" | "error";
+  status: "idle" | "running" | "completed" | "error" | "stopped";
   message?: string;
 }
 
@@ -19,24 +19,26 @@ interface AgentPanelProps {
   agents?: BackendAgent[];
 }
 
-type UIStatus = "Idle" | "Thinking" | "Approved" | "Error";
+type UIStatus = "Idle" | "Running" | "Completed" | "Error" | "Stopped";
 
 const mapStatusToUI = (status: BackendAgent["status"]): UIStatus => {
   switch (status) {
     case "idle":
       return "Idle";
-    case "thinking":
-      return "Thinking";
-    case "approved":
-      return "Approved";
+    case "running":
+      return "Running";
+    case "completed":
+      return "Completed";
     case "error":
       return "Error";
+    case "stopped":
+      return "Stopped";
   }
 };
 
 export function AgentPanel({ agents }: AgentPanelProps) {
   const activeCount =
-    agents?.filter((a) => a.status === "thinking").length ?? 0;
+    agents?.filter((a) => a.status === "running").length ?? 0;
 
   return (
     <Card className="h-full border-none rounded-none border-r border-border bg-background w-75 flex flex-col">
@@ -69,7 +71,7 @@ export function AgentPanel({ agents }: AgentPanelProps) {
                 role={agent.role}
                 status={mapStatusToUI(agent.status)}
                 statusMessage={agent.message ?? ""}
-                isWorking={agent.status === "thinking"}
+                isWorking={agent.status === "running"}
               />
             ))}
           </div>

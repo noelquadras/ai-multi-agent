@@ -155,6 +155,15 @@ def code_generator_node(state: AgentState) -> AgentState:
             "filename": version_filename
         })
         
+        emit_event(state["task_id"], {
+            "type": "agent_end",
+            "agent": "coder"
+        })
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "[AGENT_END coder]"
+        })
+        
         # ── Mutate execution_plan IN MAKE (generate) ─────────────────────────
         import copy
         exec_plan = copy.deepcopy(state.get("execution_plan", []))
@@ -183,6 +192,14 @@ def code_generator_node(state: AgentState) -> AgentState:
         emit_event(state["task_id"], {
             "type": "system_error",
             "error": f"Code generation failed: {str(e)}"
+        })
+        emit_event(state["task_id"], {
+            "type": "agent_end",
+            "agent": "coder"
+        })
+        emit_event(state["task_id"], {
+            "type": "log",
+            "message": "[AGENT_END coder]"
         })
         return {
             "errors": [{

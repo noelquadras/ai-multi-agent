@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 interface AgentCardProps {
   name: string;
   role: string;
-  status: "Active" | "Idle" | "Thinking" | "Approved" | "Waiting" | "Error";
+  status: "Active" | "Idle" | "Running" | "Completed" | "Stopped" | "Waiting" | "Error";
   confidence?: number;
   errors?: number;
   statusMessage: string;
@@ -51,16 +51,14 @@ export function AgentCard({
 }: AgentCardProps) {
   const getStatusIcon = () => {
     switch (status) {
-      case "Approved":
+      case "Completed":
         return <CheckCircle2 className="w-3 h-3 text-green-500" />;
-      case "Thinking":
-        return <Loader2 className="w-3 h-3 text-blue-500 animate-spin" />;
+      case "Running":
       case "Active":
-        return (
-          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-        );
+        return <Loader2 className="w-3 h-3 text-blue-500 animate-spin" />;
       case "Error":
         return <AlertCircle className="w-3 h-3 text-red-500" />;
+      case "Stopped":
       case "Waiting":
         return <Clock className="w-3 h-3 text-yellow-500" />;
       default:
@@ -70,11 +68,12 @@ export function AgentCard({
 
   const getStatusColor = () => {
     switch (status) {
-      case "Approved":
+      case "Completed":
       case "Active":
         return "text-green-500";
-      case "Thinking":
+      case "Running":
         return "text-blue-500";
+      case "Stopped":
       case "Waiting":
         return "text-yellow-500";
       case "Error":

@@ -40,7 +40,7 @@ interface AgentStatus {
   id: string;
   name: string;
   role: string;
-  status: "idle" | "thinking" | "approved" | "error";
+  status: "idle" | "running" | "completed" | "error" | "stopped";
   progress: number;
 }
 
@@ -169,10 +169,10 @@ function WorkspaceContent() {
         const agent = map.get(event.agent);
         if (agent) {
           if (event.type === "agent_start") {
-            agent.status = "thinking";
+            agent.status = "running";
             agent.progress = Math.max(agent.progress, 5);
           } else {
-            agent.status = "approved";
+            agent.status = "completed";
             agent.progress = 100;
           }
           map.set(agent.id, agent);
@@ -266,18 +266,22 @@ function WorkspaceContent() {
 
     if (event.type === "task_completed") {
       setTaskStatus("completed");
+      setAgents((prev) => prev.map(a => ({ ...a, status: a.status === "running" ? "completed" : a.status })));
       setRightActiveTab("activity");
     }
     if (event.type === "task_paused") {
       setTaskStatus("paused");
+      setAgents((prev) => prev.map(a => ({ ...a, status: a.status === "running" ? "stopped" : a.status })));
       setRightActiveTab("activity");
     }
     if (event.type === "task_resumed") {
       setTaskStatus("running");
+      // Could restore running state but we just rely on next agent_start
       setRightActiveTab("activity");
     }
     if (event.type === "task_cancelled") {
       setTaskStatus("cancelled");
+      setAgents((prev) => prev.map(a => ({ ...a, status: a.status === "running" ? "stopped" : a.status })));
       setRightActiveTab("activity");
     }
   };

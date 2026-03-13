@@ -148,8 +148,38 @@ def code_refiner_node(state: AgentState) -> AgentState:
             override_model=state.get("agent_models", {}).get("refiner", ""),
             base_model=state.get("model", "ollama")
         )
-        response = _trimmed_invoke(llm, messages)
-        refined_code = response.content
+        
+        # ── Streaming pass: show tokens in real-time ─────────────────────
+        from database import broadcast_event
+        accumulated_text = ""
+        try:
+            for chunk in llm.stream(messages):
+                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if token:
+                    accumulated_text += token
+                    broadcast_event(state["task_id"], {
+                        "type": "refine_stream",
+                        "agent": "refiner",
+                        "chunk": token,
+                        "done": False,
+                    })
+            # Signal stream end
+            broadcast_event(state["task_id"], {
+                "type": "refine_stream",
+                "agent": "refiner",
+                "chunk": "",
+                "done": True,
+            })
+        except Exception as stream_err:
+            emit_event(state["task_id"], {
+                "type": "log",
+                "message": f"Refiner streaming failed, falling back to invoke: {stream_err}"
+            })
+            if not accumulated_text:
+                response = _trimmed_invoke(llm, messages)
+                accumulated_text = response.content
+        
+        refined_code = accumulated_text
         clean_refined = clean_code_output(refined_code)
         _, version_filename = save_code_version(state["task_id"], clean_refined)
         
@@ -169,6 +199,14 @@ def code_refiner_node(state: AgentState) -> AgentState:
             "agent": "refiner",
             "code": clean_refined,
             "filename": version_filename
+        })
+        
+        # ── MARKER: refiner_done ────────────────────────────────────────────
+        # Raised here to confirm that the requested changes from the reviewer are done.
+        emit_event(state["task_id"], {
+            "type": "refiner_done",
+            "message": "code_refiner has completed. Review-requested changes are applied.",
+            "filename": version_filename,
         })
         
         # Build memory entry summarising what was fixed
@@ -205,6 +243,9 @@ def code_refiner_node(state: AgentState) -> AgentState:
                 if "FIX_REQUIRED" in analysis_str
                 else state.get("debug_loop_count", 0)
             ),
+            # ── MARKERS ──────────────────────────────────────────────────────────────
+            "refiner_needed": False,  # cleared: requested changes are now done
+            "refiner_done": True,     # confirmation: code_refiner ran successfully
         }
     except Exception as e:
         emit_event(state["task_id"], {
