@@ -364,6 +364,7 @@ class TerminalCommand(BaseModel):
     save_code: Optional[str] = None
     filename: Optional[str] = None
     cwd: Optional[str] = None
+    timeout: Optional[float] = None
 
 @app.post("/api/terminal/run")
 async def run_terminal_command(body: TerminalCommand):
@@ -402,8 +403,8 @@ async def run_terminal_command(body: TerminalCommand):
         
         full_command = f'cd "{cwd_abs}"; {body.command}'
         
-        # Use new robust command execution
-        result = await session.run_command(full_command)
+        # Use new robust command execution with the specified timeout
+        result = await session.run_command(full_command, timeout=body.timeout)
         
         return {
             "status": "completed", 

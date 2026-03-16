@@ -120,7 +120,7 @@ class TerminalSession:
         if self.active:
             self.process.write(data)
 
-    async def run_command(self, command: str, timeout: float = 20.0):
+    async def run_command(self, command: str, timeout: Optional[float] = 20.0):
         """
         Executes a command and returns the output (cleaned) and exit code.
         Also emits structured command events for any frontend command-event listeners.
@@ -161,7 +161,7 @@ class TerminalSession:
             start_time = time.time()
 
             while True:
-                if time.time() - start_time > timeout:
+                if timeout is not None and time.time() - start_time > timeout:
                     output_buffer += "\n[TIMEOUT]"
                     try:
                         self.process.write("\x03")  # Ctrl+C
