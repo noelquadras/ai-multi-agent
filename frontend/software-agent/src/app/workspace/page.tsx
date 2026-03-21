@@ -28,6 +28,7 @@ import {
   Activity,
   StopCircle,
   Loader2,
+  ExternalLink,
 } from "lucide-react";
 import { HistorySidebar } from "@/components/HistorySidebar";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
@@ -96,9 +97,40 @@ function WorkspaceContent() {
   const [rightActiveTab, setRightActiveTab] = useState<"activity" | "cli">("activity");
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
 
+  // Terminal pop out state
+  const [isTerminalPoppedOut, setIsTerminalPoppedOut] = useState(false);
+  const terminalWindowRef = useRef<Window | null>(null);
+
+  const handlePopOutTerminal = () => {
+    if (terminalWindowRef.current && !terminalWindowRef.current.closed) {
+      terminalWindowRef.current.focus();
+      return;
+    }
+
+    const win = window.open(
+      "/terminal",
+      "Terminal",
+      "width=1000,height=700,menubar=no,toolbar=no,location=no,status=no"
+    );
+    if (!win) {
+      alert("Please allow popups to pop out the terminal.");
+      return;
+    }
+    
+    terminalWindowRef.current = win;
+    setIsTerminalPoppedOut(true);
+
+    const checkInterval = setInterval(() => {
+      if (win.closed) {
+        clearInterval(checkInterval);
+        setIsTerminalPoppedOut(false);
+        terminalWindowRef.current = null;
+      }
+    }, 1000);
+  };
+
   // Structured command events from the terminal WebSocket
   const { commands: terminalCommands } = useTerminalCommands();
-
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -620,14 +652,43 @@ function WorkspaceContent() {
                 </div>
 
                 <div className="h-72 border-t border-border overflow-hidden flex flex-col shrink-0">
-                  <div className="flex border-b border-border bg-card px-4 py-2">
+                  <div className="flex items-center justify-between border-b border-border bg-card px-4 py-1.5">
                     <div className="flex items-center gap-2 text-sm text-foreground font-medium">
                       <Terminal className="w-4 h-4" /> Terminal
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-muted"
+                      onClick={handlePopOutTerminal}
+                      title="Pop out terminal"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </Button>
                   </div>
 
-                  <div className="flex-1 overflow-hidden bg-[#1a1b26]">
-                    <TerminalComponent className="h-full w-full" />
+                  <div className="flex-1 overflow-hidden bg-[#1a1b26] relative">
+                    {isTerminalPoppedOut ? (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground bg-card/80 backdrop-blur-sm z-10">
+                        <Terminal className="w-7 h-7 opacity-40 animate-pulse" />
+                        <span className="text-xs">Terminal is popped out</span>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="h-7 text-xs border-border hover:bg-muted mt-1"
+                          onClick={() => {
+                            if (terminalWindowRef.current) {
+                              terminalWindowRef.current.close();
+                            }
+                            setIsTerminalPoppedOut(false);
+                          }}
+                        >
+                          Restore View
+                        </Button>
+                      </div>
+                    ) : (
+                      <TerminalComponent className="h-full w-full" />
+                    )}
                   </div>
                 </div>
               </div>
