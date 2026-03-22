@@ -223,7 +223,7 @@ def code_refiner_node(state: AgentState) -> AgentState:
         new_memory = (refine_state.get("refiner_memory") or []) + [memory_entry]
         
         refine_data = {
-            "refined_code": refined_code,
+            "refined_code": clean_refined,
             "refiner_memory": new_memory
         }
         

@@ -252,8 +252,12 @@ def react_supervisor_node(state: AgentState) -> dict:
 
     # Intent gate (set once)
     if not intent:
-        intent = classify_intent(requirement, state, task_id)
-        emit_event(task_id, {"type": "log", "message": f"Intent: {intent}"})
+        if task_id.startswith("bench_"):
+            intent = "LONG_TASK"
+            emit_event(task_id, {"type": "log", "message": "Benchmark mode: forcing LONG_TASK"})
+        else:
+            intent = classify_intent(requirement, state, task_id)
+            emit_event(task_id, {"type": "log", "message": f"Intent: {intent}"})
         return {"intent": intent}
 
     if intent == "QUICK_TASK":

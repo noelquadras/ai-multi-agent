@@ -109,12 +109,31 @@ def _run_single_task(args: Tuple[Dict[str, Any], str, EvalConfig, str]) -> TaskR
                 benchmark_test_code=None,  # We run the test ourselves in the sandbox
             )
 
-            # Extract the best available code
+            # Extract the best available code.
+            # Agents store code inside agent_states (not at the top level):
+            #   code_generator → agent_states["generate"]["generated_code"]
+            #   code_refiner   → agent_states["refine"]["refined_code"]
+            # We prefer the most-refined version available, falling back to
+            # the raw generated version, and finally to any top-level key
+            # (for forward-compatibility if the schema ever changes).
+            agent_states: dict = agent_result.get("agent_states") or {}
             generated_code = (
-                agent_result.get("refined_code")
+                agent_states.get("refine", {}).get("refined_code")
+                or agent_states.get("generate", {}).get("generated_code")
+                or agent_result.get("refined_code")
                 or agent_result.get("generated_code")
                 or ""
             )
+
+            # Defensive strip: remove any remaining markdown fences that
+            # clean_code_output may have missed (e.g., code still wrapped in
+            # ```python … ``` blocks).  The sandbox must receive plain Python.
+            import re as _re
+            generated_code = _re.sub(
+                r"^```(?:python)?\s*\n", "", generated_code, flags=_re.MULTILINE
+            )
+            generated_code = _re.sub(r"\n```\s*$", "", generated_code, flags=_re.MULTILINE)
+            generated_code = generated_code.strip()
 
             # Extract telemetry the agent surface exposes
             iteration_count = agent_result.get("iteration_count", 0)
@@ -123,6 +142,7 @@ def _run_single_task(args: Tuple[Dict[str, Any], str, EvalConfig, str]) -> TaskR
 
         except Exception:
             agent_error = traceback.format_exc()
+            print(f"AGENT ERROR: {agent_error}")
             generated_code = ""
 
         # --- Evaluate in sandbox ---
@@ -157,7 +177,7 @@ def _run_single_task(args: Tuple[Dict[str, Any], str, EvalConfig, str]) -> TaskR
         samples.append(sample)
 
         # Short summary to stdout so the user sees progress
-        status_icon = "✓" if sample.passed else "✗"
+        status_icon = "[PASS]" if sample.passed else "[FAIL]"
         print(
             f"  [{task_key}] sample={sample_idx} "
             f"{status_icon} {sample.final_status} "
