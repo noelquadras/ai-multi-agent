@@ -178,6 +178,8 @@ class PlannerTool(BaseModel):
             errors.append("new_status is required for update")
 
         if self.action == "append":
+            if not self.task.description:
+                errors.append("description is required for append action")
             for dep_id in self.task.dependencies:
                 if not any(t.task_id == dep_id for t in react_plan.tasks):
                     errors.append(f"Dependency task {dep_id} not found")

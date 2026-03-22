@@ -54,7 +54,7 @@ class TestPlannerToolValidation(unittest.TestCase):
         plan = ReactPlan(goal="X", tasks=[t1])
         tool = PlannerTool(action="update", task=t1)
         tool._react_plan = plan
-        res = tool.validate_action()
+        res = tool.validate_action(plan)
         self.assertFalse(res["is_valid"])
         self.assertTrue(any("new_status" in e for e in res["errors"]))
 
@@ -64,7 +64,7 @@ class TestPlannerToolValidation(unittest.TestCase):
         missing = TaskItem(description="Missing")
         tool = PlannerTool(action="complete", task=missing)
         tool._react_plan = plan
-        res = tool.validate_action()
+        res = tool.validate_action(plan)
         self.assertFalse(res["is_valid"])
         self.assertTrue(any("not found" in e for e in res["errors"]))
 
@@ -74,7 +74,7 @@ class TestPlannerToolValidation(unittest.TestCase):
         tool_task = TaskItem(description="B", dependencies=["nope"])
         tool = PlannerTool(action="append", task=tool_task)
         tool._react_plan = plan
-        res = tool.validate_action()
+        res = tool.validate_action(plan)
         self.assertFalse(res["is_valid"])
         self.assertTrue(any("Dependency task" in e for e in res["errors"]))
 
@@ -83,7 +83,7 @@ class TestPlannerToolValidation(unittest.TestCase):
         tool_task = TaskItem(description="Long", estimated_duration=121)
         tool = PlannerTool(action="append", task=tool_task)
         tool._react_plan = plan
-        res = tool.validate_action()
+        res = tool.validate_action(plan)
         self.assertFalse(res["is_valid"])
         self.assertTrue(any("2 hours" in e for e in res["errors"]))
 
