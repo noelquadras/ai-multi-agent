@@ -135,7 +135,7 @@ def spec_writer_node(state: AgentState) -> AgentState:
             from pathlib import Path
             spec_path = Path(f"tasks/{state['task_id']}/spec/design.json")
             spec_path.parent.mkdir(parents=True, exist_ok=True)
-            spec_path.write_text(spec.model_dump_json(indent=2))
+            spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
             spec_doc_path = str(spec_path)
             
             # Build human-readable spec content for the frontend

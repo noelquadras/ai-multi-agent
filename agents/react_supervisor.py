@@ -191,10 +191,10 @@ class PlannerTool(BaseModel):
 class TriggerAgent(BaseModel):
     agent: Literal["spec_writer", "coder", "reviewer", "refiner", "tester", "analyzer"]
     objective: str
-    context: Optional[dict] = None
+    context: Optional[Any] = None
     priority: Literal["low", "medium", "high", "critical"] = "medium"
     estimated_duration: Optional[int] = None
-    dependencies: List[str] = Field(default_factory=list)
+    dependencies: Optional[List[str]] = Field(default_factory=list)
 
 
 class QuickResponse(BaseModel):
@@ -431,17 +431,13 @@ def react_supervisor_node(state: AgentState) -> dict:
     try:
         if name == "PlannerTool":
             # Ensure nested 'task' dict has a 'description' to avoid hard ValidationError
-            if isinstance(args.get("task"), dict) and "description" not in args["task"]:
-                args["task"]["description"] = args["task"].get("task", "Complete task")
+            if isinstance(args.get("task"), dict):
+                if "description" not in args["task"]:
+                    args["task"]["description"] = args["task"].get("task", "Complete task")
+                if "id" in args["task"] and "task_id" not in args["task"]:
+                    args["task"]["task_id"] = args["task"]["id"]
 
-            try:
-                validated = PlannerTool(**args)
-            except ValidationError as ve:
-                emit_event(
-                    task_id,
-                    {"type": "tool_validation_error", "tool": "PlannerTool", "errors": [str(ve)]},
-                )
-                return updates
+            validated = PlannerTool(**args)
 
             # If the LLM didn't supply a matching task_id (it auto-generated a new
             # UUID via TaskItem's default_factory), resolve it from the plan by
@@ -517,8 +513,6 @@ def react_supervisor_node(state: AgentState) -> dict:
                 updates["validation_result"] = validation_result
                 return updates
 
-            if react_plan.is_finished():
-                updates["terminate"] = True
             return updates
 
         if name == "TriggerAgent":
@@ -604,9 +598,19 @@ def react_supervisor_node(state: AgentState) -> dict:
             ]
             return updates
 
-    except ValidationError:
-        emit_event(task_id, {"type": "tool_validation_error", "tool": name})
-        return {"terminate": True}
+    except ValidationError as ve:
+        error_event = {
+            "type": "tool_validation_error",
+            "tool": name,
+            "errors": [str(ve)],
+            "timestamp": datetime.now().isoformat(),
+        }
+        meta["consecutive_errors"] = meta.get("consecutive_errors", 0) + 1
+        emit_event(task_id, error_event)
+        recent_events.append(error_event)
+        updates["events"] = list(events) + [error_event]
+        updates["react_meta"] = meta
+        return updates
 
     return updates
 
