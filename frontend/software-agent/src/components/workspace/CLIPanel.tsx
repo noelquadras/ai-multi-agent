@@ -85,7 +85,7 @@ export function CLIPanel({ logs, testResults, commandRecords = [] }: CLIPanelPro
   const isEmpty = logs.length === 0 && !testResults && !hasCommands;
 
   return (
-    <div className="w-100 h-full bg-card flex flex-col">
+    <div className="w-full h-full bg-card flex flex-col">
       {/* Header */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between">

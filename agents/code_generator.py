@@ -173,9 +173,9 @@ def code_generator_node(state: AgentState) -> AgentState:
                 break
                 
         return {
-            "agent_states": {"generate": {"generated_code": code}},
+            "agent_states": {"generate": {"generated_code": clean_code}},
             "messages": [make_action_message(
-                f"Generated {len(code)} chars of code",
+                f"Generated {len(clean_code)} chars of code",
                 ActionType.CODE_READY, "generate"
             )],
             "iteration_count": state.get("iteration_count", 0) + 1,

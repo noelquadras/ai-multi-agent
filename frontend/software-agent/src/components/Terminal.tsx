@@ -177,7 +177,7 @@ export function Terminal({ className }: TerminalProps) {
     return (
         <div
             ref={terminalRef}
-            className={`w-full h-full min-h-[400px] bg-[#1a1b26] p-2 rounded-md overflow-hidden ${className}`}
+            className={`w-full h-full bg-[#1a1b26] p-2 rounded-md overflow-hidden ${className}`}
         />
     );
 }

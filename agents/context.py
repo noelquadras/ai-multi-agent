@@ -191,7 +191,7 @@ class TaskItem(BaseModel):
     """A single task in the ReAct planning system."""
 
     task_id: str = Field(default_factory=lambda: uuid4().hex)
-    description: str
+    description: str = ""
     priority: Literal["low", "medium", "high", "critical"] = "medium"
     estimated_duration: Optional[int] = None  # minutes
     status: Literal["pending", "in_progress", "completed"] = "pending"

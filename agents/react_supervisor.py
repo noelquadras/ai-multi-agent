@@ -178,6 +178,8 @@ class PlannerTool(BaseModel):
             errors.append("new_status is required for update")
 
         if self.action == "append":
+            if not self.task.description:
+                errors.append("description is required for append action")
             for dep_id in self.task.dependencies:
                 if not any(t.task_id == dep_id for t in react_plan.tasks):
                     errors.append(f"Dependency task {dep_id} not found")
@@ -191,10 +193,10 @@ class PlannerTool(BaseModel):
 class TriggerAgent(BaseModel):
     agent: Literal["spec_writer", "coder", "reviewer", "refiner", "tester", "analyzer"]
     objective: str
-    context: Optional[dict] = None
+    context: Optional[Any] = None
     priority: Literal["low", "medium", "high", "critical"] = "medium"
     estimated_duration: Optional[int] = None
-    dependencies: List[str] = Field(default_factory=list)
+    dependencies: Optional[List[str]] = Field(default_factory=list)
 
 
 class QuickResponse(BaseModel):
@@ -252,8 +254,12 @@ def react_supervisor_node(state: AgentState) -> dict:
 
     # Intent gate (set once)
     if not intent:
-        intent = classify_intent(requirement, state, task_id)
-        emit_event(task_id, {"type": "log", "message": f"Intent: {intent}"})
+        if task_id.startswith("bench_"):
+            intent = "LONG_TASK"
+            emit_event(task_id, {"type": "log", "message": "Benchmark mode: forcing LONG_TASK"})
+        else:
+            intent = classify_intent(requirement, state, task_id)
+            emit_event(task_id, {"type": "log", "message": f"Intent: {intent}"})
         return {"intent": intent}
 
     if intent == "QUICK_TASK":
@@ -427,17 +433,13 @@ def react_supervisor_node(state: AgentState) -> dict:
     try:
         if name == "PlannerTool":
             # Ensure nested 'task' dict has a 'description' to avoid hard ValidationError
-            if isinstance(args.get("task"), dict) and "description" not in args["task"]:
-                args["task"]["description"] = args["task"].get("task", "Complete task")
+            if isinstance(args.get("task"), dict):
+                if "description" not in args["task"]:
+                    args["task"]["description"] = args["task"].get("task", "Complete task")
+                if "id" in args["task"] and "task_id" not in args["task"]:
+                    args["task"]["task_id"] = args["task"]["id"]
 
-            try:
-                validated = PlannerTool(**args)
-            except ValidationError as ve:
-                emit_event(
-                    task_id,
-                    {"type": "tool_validation_error", "tool": "PlannerTool", "errors": [str(ve)]},
-                )
-                return updates
+            validated = PlannerTool(**args)
 
             # If the LLM didn't supply a matching task_id (it auto-generated a new
             # UUID via TaskItem's default_factory), resolve it from the plan by
@@ -513,8 +515,6 @@ def react_supervisor_node(state: AgentState) -> dict:
                 updates["validation_result"] = validation_result
                 return updates
 
-            if react_plan.is_finished():
-                updates["terminate"] = True
             return updates
 
         if name == "TriggerAgent":
@@ -579,10 +579,12 @@ def react_supervisor_node(state: AgentState) -> dict:
             return updates
 
         if name == "QuickResponse":
+            response_text = args.get("response", "")
+            emit_event(task_id, {"type": "conversation", "message": response_text})
             updates["terminate"] = True
             updates["messages"] = [
                 make_action_message(
-                    args.get("response", ""),
+                    response_text,
                     ActionType.DECISION_REFINE,
                     "react_supervisor",
                 )
@@ -590,19 +592,47 @@ def react_supervisor_node(state: AgentState) -> dict:
             return updates
 
         if name == "ClarificationTool":
+            question = args.get("question", "Could you please clarify your request?")
+            emit_event(task_id, {"type": "clarification", "message": question})
+
+            max_wait = 120
+            poll_interval = 3
+            waited = 0
+            while waited < max_wait:
+                check_interrupts(task_id)
+                human_msgs = get_human_messages(task_id, mark_consumed=True)
+                if human_msgs:
+                    user_reply = human_msgs[-1]["message"]
+                    emit_event(task_id, {"type": "log", "message": f"Received clarification: {user_reply}"})
+                    updates["requirements"] = f"{requirement}\n\n[Supervisor Question]: {question}\n[User Response]: {user_reply}"
+                    updates["messages"] = [
+                        make_action_message(
+                            f"Clarification received: {user_reply}",
+                            ActionType.TASK_CLASSIFIED,
+                            "react_supervisor",
+                        )
+                    ]
+                    return updates
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+            emit_event(task_id, {"type": "log", "message": "No clarification received - ending workflow."})
             updates["terminate"] = True
-            updates["messages"] = [
-                make_action_message(
-                    args.get("question", ""),
-                    ActionType.DECISION_REFINE,
-                    "react_supervisor",
-                )
-            ]
             return updates
 
-    except ValidationError:
-        emit_event(task_id, {"type": "tool_validation_error", "tool": name})
-        return {"terminate": True}
+    except ValidationError as ve:
+        error_event = {
+            "type": "tool_validation_error",
+            "tool": name,
+            "errors": [str(ve)],
+            "timestamp": datetime.now().isoformat(),
+        }
+        meta["consecutive_errors"] = meta.get("consecutive_errors", 0) + 1
+        emit_event(task_id, error_event)
+        recent_events.append(error_event)
+        updates["events"] = list(events) + [error_event]
+        updates["react_meta"] = meta
+        return updates
 
     return updates
 
