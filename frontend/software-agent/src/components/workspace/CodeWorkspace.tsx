@@ -12,6 +12,8 @@ import {
   Play,
   FileSearch,
   ClipboardList,
+  Pencil,
+  Save,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -43,6 +45,8 @@ export function CodeWorkspace({
 }: CodeWorkspaceProps) {
   const [activeFile, setActiveFile] = useState<string>("");
   const [copied, setCopied] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [localEdits, setLocalEdits] = useState<Record<string, string>>({});
   const contentRef = useRef<HTMLDivElement>(null);
 
   // When codeFiles change, auto-select the latest version
@@ -61,8 +65,9 @@ export function CodeWorkspace({
   useEffect(() => {
     if (streamingFile) {
       setActiveFile(streamingFile);
+      setIsEditing(false);
     }
-  }, [streamingFile]);
+  }, [streamingFile, setIsEditing]);
 
   // Auto-scroll to bottom while streaming
   useEffect(() => {
@@ -84,9 +89,17 @@ export function CodeWorkspace({
 
   // Determine active content — prefer streaming if the streaming tab is active
   const isStreamingActive = streamingFile && activeFile === streamingFile;
-  const activeContent = isStreamingActive
+  const originalActiveContent = isStreamingActive
     ? streamingContent
     : displayFiles.find((f) => f.filename === activeFile)?.content || "";
+
+  const activeContent = localEdits[activeFile] !== undefined && !isStreamingActive 
+    ? localEdits[activeFile] 
+    : originalActiveContent;
+
+  const handleEditChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setLocalEdits({ ...localEdits, [activeFile]: e.target.value });
+  };
 
   // Show the streaming tab in the tab list
   const showStreamingTab =
@@ -220,7 +233,10 @@ export function CodeWorkspace({
           {displayFiles.map((file) => (
             <button
               key={file.filename}
-              onClick={() => setActiveFile(file.filename)}
+              onClick={() => {
+                setActiveFile(file.filename);
+                setIsEditing(false);
+              }}
               className={`
                     px-4 text-sm border-r border-border flex items-center gap-2 h-full transition-colors font-medium whitespace-nowrap
                     ${activeFile === file.filename
@@ -246,16 +262,29 @@ export function CodeWorkspace({
           {activeContent && activeContent.length > 0 && (
             <>
               {isCodeFile(activeFile) && !isStreamingActive && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleRunCode()}
-                  className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
-                  title="Run in Terminal"
-                >
-                  <Play className="w-3 h-3 mr-1" />
-                  Run
-                </Button>
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsEditing(!isEditing)}
+                    className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
+                    title={isEditing ? "Save Edits" : "Edit Code"}
+                  >
+                    {isEditing ? <Save className="w-3 h-3 mr-1" /> : <Pencil className="w-3 h-3 mr-1" />}
+                    {isEditing ? "Save" : "Edit"}
+                  </Button>
+                  
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleRunCode()}
+                    className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
+                    title="Run in Terminal"
+                  >
+                    <Play className="w-3 h-3 mr-1" />
+                    Run
+                  </Button>
+                </>
               )}
 
               <Button
@@ -292,25 +321,34 @@ export function CodeWorkspace({
         </div>
       </CardHeader>
 
-      <CardContent className="flex-1 p-0 overflow-hidden">
+      <CardContent className="flex-1 p-0 overflow-hidden relative">
         <div ref={contentRef} className="h-full overflow-auto bg-muted text-sm font-mono">
-          <div className="min-w-fit">
-            {(activeContent || "# File is empty").split("\n").map((line, i) => (
-              <div key={i} className="flex hover:bg-muted-foreground/5">
-                <div className="shrink-0 w-12 bg-muted border-r border-border text-right pr-3 select-none sticky left-0 text-muted-foreground z-10 h-auto">
-                  {i + 1}
+          {isEditing && isCodeFile(activeFile) && !isStreamingActive ? (
+            <textarea
+              value={activeContent}
+              onChange={handleEditChange}
+              className="w-full h-full min-h-full bg-muted text-foreground font-mono p-4 resize-none focus:outline-none focus:ring-1 focus:ring-blue-500 rounded-sm"
+              spellCheck={false}
+            />
+          ) : (
+            <div className="min-w-fit pointer-events-auto">
+              {(activeContent || "# File is empty").split("\n").map((line, i) => (
+                <div key={i} className="flex hover:bg-muted-foreground/5">
+                  <div className="shrink-0 w-12 bg-muted border-r border-border text-right pr-3 select-none sticky left-0 text-muted-foreground z-10 h-auto">
+                    {i + 1}
+                  </div>
+                  <pre className="grow pl-4 text-foreground whitespace-pre-wrap font-mono break-all py-[0.1rem]">
+                    {line || " "}
+                    {/* Blinking cursor on the last line while streaming */}
+                    {isStreamingActive &&
+                      i === (activeContent || "").split("\n").length - 1 && (
+                        <span className="inline-block w-2 h-4 bg-indigo-400 animate-pulse ml-0.5 align-middle rounded-sm" />
+                      )}
+                  </pre>
                 </div>
-                <pre className="grow pl-4 text-foreground whitespace-pre-wrap font-mono break-all py-[0.1rem]">
-                  {line || " "}
-                  {/* Blinking cursor on the last line while streaming */}
-                  {isStreamingActive &&
-                    i === (activeContent || "").split("\n").length - 1 && (
-                      <span className="inline-block w-2 h-4 bg-indigo-400 animate-pulse ml-0.5 align-middle rounded-sm" />
-                    )}
-                </pre>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </CardContent>
 
