@@ -579,10 +579,12 @@ def react_supervisor_node(state: AgentState) -> dict:
             return updates
 
         if name == "QuickResponse":
+            response_text = args.get("response", "")
+            emit_event(task_id, {"type": "conversation", "message": response_text})
             updates["terminate"] = True
             updates["messages"] = [
                 make_action_message(
-                    args.get("response", ""),
+                    response_text,
                     ActionType.DECISION_REFINE,
                     "react_supervisor",
                 )
@@ -590,14 +592,32 @@ def react_supervisor_node(state: AgentState) -> dict:
             return updates
 
         if name == "ClarificationTool":
+            question = args.get("question", "Could you please clarify your request?")
+            emit_event(task_id, {"type": "clarification", "message": question})
+
+            max_wait = 120
+            poll_interval = 3
+            waited = 0
+            while waited < max_wait:
+                check_interrupts(task_id)
+                human_msgs = get_human_messages(task_id, mark_consumed=True)
+                if human_msgs:
+                    user_reply = human_msgs[-1]["message"]
+                    emit_event(task_id, {"type": "log", "message": f"Received clarification: {user_reply}"})
+                    updates["requirements"] = f"{requirement}\n\n[Supervisor Question]: {question}\n[User Response]: {user_reply}"
+                    updates["messages"] = [
+                        make_action_message(
+                            f"Clarification received: {user_reply}",
+                            ActionType.TASK_CLASSIFIED,
+                            "react_supervisor",
+                        )
+                    ]
+                    return updates
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+            emit_event(task_id, {"type": "log", "message": "No clarification received - ending workflow."})
             updates["terminate"] = True
-            updates["messages"] = [
-                make_action_message(
-                    args.get("question", ""),
-                    ActionType.DECISION_REFINE,
-                    "react_supervisor",
-                )
-            ]
             return updates
 
     except ValidationError as ve:
