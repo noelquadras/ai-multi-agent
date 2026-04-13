@@ -133,7 +133,10 @@ class TerminalSession:
 
     def write(self, data: str):
         if self.active:
-            self.process.write(data)
+            if sys.platform != "win32" and isinstance(data, str):
+                self.process.write(data.encode('utf-8'))
+            else:
+                self.process.write(data)
 
     async def run_command(self, command: str, timeout: Optional[float] = 20.0):
         """
@@ -173,7 +176,7 @@ class TerminalSession:
                 exit_logic = f'echo "{marker}_{run_id} $?"'
                 full_command = f'{command}; {exit_logic}'
 
-            self.process.write(full_command + "\r\n")
+            self.write(full_command + "\r\n")
 
             start_time = time.time()
 
@@ -181,7 +184,7 @@ class TerminalSession:
                 if timeout is not None and time.time() - start_time > timeout:
                     output_buffer += "\n[TIMEOUT]"
                     try:
-                        self.process.write("\x03")  # Ctrl+C
+                        self.write("\x03")  # Ctrl+C
                     except Exception:
                         pass
                     break

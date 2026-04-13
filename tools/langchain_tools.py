@@ -2,7 +2,7 @@ import json
 import asyncio
 from typing import Optional, List, Dict
 from langchain_core.tools import tool
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 import aiohttp
 
 @tool

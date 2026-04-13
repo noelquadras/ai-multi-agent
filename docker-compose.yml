@@ -33,3 +33,4 @@ services:
       - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
       - NEXT_PUBLIC_CONVEX_URL=https://vibrant-ferret-982.convex.cloud
       - AUTH_TRUST_HOST=true
+      - AUTH_SECRET=my_very_secret_key_12345
