@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useRef, ReactNode } from "react";
+import { BACKEND_URL } from "@/lib/config";
 
 /* 1. Types should usually be exported if they are used in other files */
 export type TaskEvent =
@@ -41,7 +42,7 @@ export function ExecutionProvider({ children }: { children: ReactNode }) {
     setIsRunning(true);
     setEvents([]); // Clear old logs
 
-    const es = new EventSource(`http://localhost:8000/api/task/${id}/events`);
+    const es = new EventSource(`${BACKEND_URL}/api/task/${id}/events`);
 
     es.onmessage = (e) => {
       const event: TaskEvent = JSON.parse(e.data);

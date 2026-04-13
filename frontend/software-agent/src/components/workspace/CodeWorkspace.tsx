@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { BACKEND_URL } from "@/lib/config";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -31,6 +32,7 @@ interface CodeWorkspaceProps {
   streamingFile?: string | null;
   streamingContent?: string;
   onCopyCode?: (code: string) => void;
+  taskId?: string | null;
 }
 
 export function CodeWorkspace({
@@ -42,6 +44,7 @@ export function CodeWorkspace({
   streamingFile = null,
   streamingContent = "",
   onCopyCode,
+  taskId = null,
 }: CodeWorkspaceProps) {
   const [activeFile, setActiveFile] = useState<string>("");
   const [copied, setCopied] = useState(false);
@@ -101,6 +104,23 @@ export function CodeWorkspace({
     setLocalEdits({ ...localEdits, [activeFile]: e.target.value });
   };
 
+  const handleToggleEdit = async () => {
+    if (isEditing) {
+      if (taskId && localEdits[activeFile] !== undefined) {
+        try {
+          await fetch(`${BACKEND_URL}/api/task/${taskId}/code`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: activeContent }),
+          });
+        } catch (err) {
+          console.error("Failed to save edited code:", err);
+        }
+      }
+    }
+    setIsEditing(!isEditing);
+  };
+
   // Show the streaming tab in the tab list
   const showStreamingTab =
     streamingFile &&
@@ -129,7 +149,7 @@ export function CodeWorkspace({
     }
 
     try {
-      await fetch("http://localhost:8000/api/terminal/run", {
+      await fetch(`${BACKEND_URL}/api/terminal/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -266,7 +286,7 @@ export function CodeWorkspace({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setIsEditing(!isEditing)}
+                    onClick={handleToggleEdit}
                     className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground mr-1"
                     title={isEditing ? "Save Edits" : "Edit Code"}
                   >

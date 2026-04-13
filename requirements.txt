@@ -21,5 +21,6 @@ httpx  # For async HTTP calls to Convex
 # Utilities
 cors
 email-validator
-pywinpty
+pywinpty; sys_platform == 'win32'
+ptyprocess; sys_platform != 'win32'
 websockets

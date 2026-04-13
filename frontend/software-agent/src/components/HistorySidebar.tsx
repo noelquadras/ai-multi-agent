@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useTheme } from "@/hooks/useTheme";
+import { BACKEND_URL } from "@/lib/config";
 import {
   Loader2,
   Trash2,
@@ -140,7 +141,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
   useEffect(() => {
     if (open) {
       setLoading(true);
-      fetch("http://localhost:8000/api/history")
+      fetch(`${BACKEND_URL}/api/history`)
         .then((res) => res.json())
         .then((data) => {
           setHistory(data);
@@ -158,7 +159,7 @@ export function HistorySidebar({ agents, apiStatus }: HistorySidebarProps) {
     if (!confirm("Are you sure you want to delete this task?")) return;
 
     try {
-      const res = await fetch(`http://localhost:8000/api/task/${taskId}`, {
+      const res = await fetch(`${BACKEND_URL}/api/task/${taskId}`, {
         method: "DELETE",
       });
       if (res.ok) {

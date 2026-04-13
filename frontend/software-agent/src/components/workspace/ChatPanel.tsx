@@ -476,16 +476,25 @@ export function ChatPanel({
 
     /* ---- Merge event messages with user-typed messages, sorted by time ---- */
     const messages = useMemo(() => {
-        const all = [...eventMessages, ...userMessages];
+        // Filter out userMessages that are already represented in eventMessages (echoed by backend via SSE)
+        const filteredUserMessages = userMessages.filter(um => 
+            !eventMessages.some(em => em.role === "user" && em.content === um.content)
+        );
+
+        const all = [...eventMessages, ...filteredUserMessages];
 
         if (initialPrompt) {
-            all.push({
-                id: "initial_prompt",
-                role: "user",
-                content: initialPrompt,
-                timestamp: initialTimestamp || new Date().toISOString(),
-                status: "complete",
-            });
+            // Only add the initial prompt explicitly if it hasn't already been emitted as a human_message event
+            const hasInitialPromptInEvents = eventMessages.some(em => em.role === "user" && em.content === initialPrompt);
+            if (!hasInitialPromptInEvents) {
+                all.push({
+                    id: "initial_prompt",
+                    role: "user",
+                    content: initialPrompt,
+                    timestamp: initialTimestamp || new Date().toISOString(),
+                    status: "complete",
+                });
+            }
         }
 
         all.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());

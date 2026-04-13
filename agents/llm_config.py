@@ -55,7 +55,8 @@ def check_model_tool_support(model_name: str) -> bool:
 
     # Try binding a tool – if it fails, model doesn't support tools
     try:
-        test_llm = ChatOllama(model=model_name, base_url="http://localhost:11434", temperature=0.1)
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        test_llm = ChatOllama(model=model_name, base_url=ollama_host, temperature=0.1)
         test_llm.bind_tools([search_duckduckgo])
         _model_tool_support_cache[model_name] = True
         return True
@@ -99,9 +100,10 @@ def _get_ollama(model_name: str) -> ChatOllama:
     global _ollama_llm
     if _ollama_llm is None or getattr(_ollama_llm, "model", "") != model_name:
         print(f"Initializing Ollama with model: {model_name}")
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         _ollama_llm = ChatOllama(
             model=model_name,
-            base_url="http://localhost:11434",
+            base_url=ollama_host,
             temperature=0.7,
         )
     return _ollama_llm

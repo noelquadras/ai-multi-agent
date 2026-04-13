@@ -6,11 +6,20 @@ import re
 from typing import Dict, Optional, List
 
 
-# Try importing pywinpty
-try:
-    from winpty import PtyProcess
-except ImportError:
-    PtyProcess = None
+import sys
+
+# Try importing pywinpty (Windows) or ptyprocess (Linux)
+PtyProcess = None
+if sys.platform == 'win32':
+    try:
+        from winpty import PtyProcess
+    except ImportError:
+        pass
+else:
+    try:
+        from ptyprocess import PtyProcess
+    except ImportError:
+        pass
 
 
 class TerminalSession:
@@ -249,18 +258,23 @@ class TerminalManager:
                 del self.sessions[session_id]
 
         if PtyProcess is None:
-            raise RuntimeError("pywinpty is not installed. Please install it with 'pip install pywinpty'.")
+            raise RuntimeError("PTY implementation not installed. Please install 'pywinpty' (Windows) or 'ptyprocess' (Linux).")
 
-        shell = "powershell.exe"
-
-        if not os.path.exists(cwd):
-            cwd = os.getcwd()
-
-        proc = PtyProcess.spawn(
-            shell.split(),
-            cwd=os.path.abspath(cwd),
-            dimensions=(80, 24)
-        )
+        if sys.platform == "win32":
+            shell = "powershell.exe"
+            proc = PtyProcess.spawn(
+                shell.split(),
+                cwd=os.path.abspath(cwd),
+                dimensions=(80, 24)
+            )
+        else:
+            shell = "/bin/bash"
+            # ptyprocess.spawn needs the executable and arguments separately
+            proc = PtyProcess.spawn(
+                [shell],
+                cwd=os.path.abspath(cwd),
+                dimensions=(24, 80) # ptyprocess uses (rows, cols)
+            )
 
         loop_to_use = self.main_loop
         if not loop_to_use:

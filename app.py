@@ -40,9 +40,10 @@ load_dotenv()
 app = FastAPI(title="AI Software Crew API", version="3.1.0")
 
 # --- CORS SETUP ---
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -603,6 +604,38 @@ async def get_all_history():
         cols = [column[0] for column in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
+class CodeUpdateRequest(BaseModel):
+    code: str
+
+@app.post("/api/task/{task_id}/code")
+async def update_task_code(task_id: str, req: CodeUpdateRequest):
+    """Saves user-edited code to disk and injects it into the task state."""
+    # 1. Save artifact to disk
+    from agents.artifacts import save_code_version
+    save_code_version(task_id, req.code)
+    
+    # 2. Inject into the shared graph state so agents (like tester) see it
+    from main import create_agent_graph
+    try:
+        graph = create_agent_graph()
+        config = {"configurable": {"thread_id": task_id}}
+        
+        # We push to the 'refine' state bucket which takes precedence in testing
+        updated_state = {
+            "agent_states": {
+                "refine": {"refined_code": req.code}
+            }
+        }
+        graph.update_state(config, updated_state)
+        
+        # Also emit event to update frontend codeFiles list if they're subscribed
+        emit_event(task_id, {"type": "code_output", "agent": "human", "code": req.code})
+    except Exception as e:
+        print(f"Failed to update task state with edited code: {e}")
+        raise HTTPException(status_code=500, detail="Failed to inject code into agent state.")
+        
+    return {"status": "code_updated"}
+
 
 # --- ARTIFACT ROUTES ---
 
@@ -715,7 +748,8 @@ async def get_available_models():
     local_models = []
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get("http://localhost:11434/api/tags", timeout=2.0)
+            ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            response = await client.get(f"{ollama_host}/api/tags", timeout=2.0)
             if response.status_code == 200:
                 data = response.json()
                 # Transform to our model format

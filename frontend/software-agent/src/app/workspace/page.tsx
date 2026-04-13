@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import dynamic from "next/dynamic";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { useTerminalCommands } from "@/hooks/useTerminalCommands";
+import { BACKEND_URL } from "@/lib/config";
 
 const TerminalComponent = dynamic(
   () => import("@/components/Terminal").then((mod) => mod.Terminal),
@@ -324,7 +325,7 @@ function WorkspaceContent() {
 
   const refreshStatus = async (id: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/task/${id}`);
+      const res = await fetch(`${BACKEND_URL}/api/task/${id}`);
       if (!res.ok) throw new Error("Task not found");
       const data: TaskSnapshot = await res.json();
       setTaskStatus(data.status);
@@ -359,7 +360,7 @@ function WorkspaceContent() {
     setTaskCreatedAt("");
 
     // Fetch existing code versions from disk
-    fetch(`http://localhost:8000/api/task/${taskId}/code-versions`)
+    fetch(`${BACKEND_URL}/api/task/${taskId}/code-versions`)
       .then((r) => r.json())
       .then((data) => {
         if (data.files && data.files.length > 0) {
@@ -372,7 +373,7 @@ function WorkspaceContent() {
       .catch(() => { });
 
     // Fetch latest spec from disk
-    fetch(`http://localhost:8000/api/task/${taskId}/spec`)
+    fetch(`${BACKEND_URL}/api/task/${taskId}/spec`)
       .then((r) => r.json())
       .then((data) => {
         if (data.spec) {
@@ -382,7 +383,7 @@ function WorkspaceContent() {
       .catch(() => { });
 
     // Fetch latest review from disk
-    fetch(`http://localhost:8000/api/task/${taskId}/review`)
+    fetch(`${BACKEND_URL}/api/task/${taskId}/review`)
       .then((r) => r.json())
       .then((data) => {
         if (data.review) {
@@ -395,7 +396,7 @@ function WorkspaceContent() {
     refreshStatus(taskId);
 
     const es = new EventSource(
-      `http://localhost:8000/api/task/${taskId}/events`,
+      `${BACKEND_URL}/api/task/${taskId}/events`,
     );
 
     es.onmessage = (e) => {
@@ -418,40 +419,40 @@ function WorkspaceContent() {
 
   const handlePause = async () => {
     if (!taskId) return;
-    await fetch(`http://localhost:8000/api/task/${taskId}/pause`, {
+    await fetch(`${BACKEND_URL}/api/task/${taskId}/pause`, {
       method: "POST",
     });
   };
 
   const handleResume = async () => {
     if (!taskId) return;
-    await fetch(`http://localhost:8000/api/task/${taskId}/resume`, {
+    await fetch(`${BACKEND_URL}/api/task/${taskId}/resume`, {
       method: "POST",
     });
   };
 
   const handleCancel = async () => {
     if (!taskId) return;
-    await fetch(`http://localhost:8000/api/task/${taskId}/cancel`, {
+    await fetch(`${BACKEND_URL}/api/task/${taskId}/cancel`, {
       method: "POST",
     });
   };
 
   const handleApprove = async () => {
     if (!taskId) return;
-    await fetch(`http://localhost:8000/api/task/${taskId}/approve`, {
+    await fetch(`${BACKEND_URL}/api/task/${taskId}/approve`, {
       method: "POST",
     });
   };
 
   const handleReject = async (feedback: string) => {
     if (!taskId) return;
-    await fetch(`http://localhost:8000/api/task/${taskId}/reject`, {
+    await fetch(`${BACKEND_URL}/api/task/${taskId}/reject`, {
       method: "POST",
     });
 
     // Call regenerate endpoint which creates a new task with feedback
-    const response = await fetch(`http://localhost:8000/api/task/${taskId}/regenerate`, {
+    const response = await fetch(`${BACKEND_URL}/api/task/${taskId}/regenerate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ feedback }),
@@ -594,7 +595,7 @@ function WorkspaceContent() {
                   initialTimestamp={taskCreatedAt}
                   onSendMessage={async (message) => {
                     try {
-                      await fetch(`http://localhost:8000/api/task/${taskId}/message`, {
+                      await fetch(`${BACKEND_URL}/api/task/${taskId}/message`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ message }),
@@ -608,7 +609,7 @@ function WorkspaceContent() {
               </div>
 
               <div className="flex-1 overflow-hidden">
-                <CodeWorkspace code={outputs.code} codeFiles={codeFiles} specFile={specFile} reviewFile={reviewFile} streamingFile={streamingFile} streamingContent={streamingContent} isReadOnly />
+                <CodeWorkspace code={outputs.code} codeFiles={codeFiles} specFile={specFile} reviewFile={reviewFile} streamingFile={streamingFile} streamingContent={streamingContent} isReadOnly taskId={taskId} />
               </div>
 
               <div className="hidden xl:flex flex-col border-l border-border w-[450px]">

@@ -1,0 +1,7 @@
+node_modules
+.next
+.next-build
+.next-build-ship
+.env.local
+out
+build

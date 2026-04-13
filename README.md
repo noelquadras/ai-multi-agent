@@ -161,6 +161,25 @@ NEXT_PUBLIC_CONVEX_URL=https://your-project.convex.cloud
 
 ---
 
+## 🐳 Running with Docker
+
+The easiest way to run the project without manual installation is using **Docker Compose**. This ensures all dependencies (including PTY support for terminal sessions) are correctly configured.
+
+### 1. Build and Start
+
+```bash
+docker-compose up --build
+```
+
+### 2. Access the Application
+
+- **Frontend:** `http://localhost:3000`
+- **Backend API:** `http://localhost:8000`
+
+> **Note:** If you are using local Ollama, ensure it is running on your host machine at `http://localhost:11434`. By default, the backend container will try to reach the host's Ollama service.
+
+---
+
 ## 🏃 Running (Development)
 
 You need **2–3 terminal windows** running simultaneously:

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
+import { BACKEND_URL } from "@/lib/config";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -54,7 +55,7 @@ export default function HomePage() {
   const [models, setModels] = useState<ModelOption[]>([]);
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/models")
+    fetch(`${BACKEND_URL}/api/models`)
       .then((res) => res.json())
       .then((data) => {
         const mappedModels = data.models.map((m: any) => ({
@@ -80,7 +81,7 @@ export default function HomePage() {
   ========================= */
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/health")
+    fetch(`${BACKEND_URL}/api/health`)
       .then((r) => setApiStatus(r.ok ? "online" : "offline"))
       .catch(() => setApiStatus("offline"));
   }, []);
@@ -102,7 +103,7 @@ export default function HomePage() {
     });
 
     try {
-      const res = await fetch("http://localhost:8000/api/run-crew", {
+      const res = await fetch(`${BACKEND_URL}/api/run-crew`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

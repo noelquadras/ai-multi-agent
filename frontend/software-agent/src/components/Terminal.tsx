@@ -6,6 +6,8 @@ import { FitAddon } from "xterm-addon-fit";
 import { WebLinksAddon } from "xterm-addon-web-links";
 import "xterm/css/xterm.css";
 
+import { BACKEND_URL } from "@/lib/config";
+
 interface TerminalProps {
     className?: string;
 }
@@ -70,9 +72,9 @@ export function Terminal({ className }: TerminalProps) {
         fitAddonRef.current = fitAddon;
 
         // WebSocket connection
-        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-        const host = window.location.hostname || "localhost";
-        const wsUrl = `${protocol}://${host}:8000/ws/terminal/client_${Math.random().toString(36).substring(7)}`;
+        // Convert HTTP/HTTPS URL to WS/WSS URL
+        const wsBaseUrl = BACKEND_URL.replace(/^http/, 'ws');
+        const wsUrl = `${wsBaseUrl}/ws/terminal/client_${Math.random().toString(36).substring(7)}`;
 
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;

@@ -1,0 +1,12 @@
+.venv
+__pycache__
+*.db
+*.db-shm
+*.db-wal
+.git
+.env
+frontend
+node_modules
+tasks
+temp_run
+.next
