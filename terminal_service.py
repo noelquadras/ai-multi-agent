@@ -49,6 +49,10 @@ class TerminalSession:
                 # This blocks until data is available
                 data = self.process.read(4096)
                 if data:
+                    # On Linux/ptyprocess, data is bytes. On Windows/winpty, it might be str or bytes depending on version.
+                    if isinstance(data, bytes):
+                        data = data.decode('utf-8', errors='replace')
+
                     # 1. Send raw data to control listeners (commands need exact output)
                     for q in list(self.control_listeners):
                         self.loop.call_soon_threadsafe(q.put_nowait, data)
@@ -71,8 +75,10 @@ class TerminalSession:
         Filters out the internal agent command machinery for display.
         Hides the exit-code marker logic appended to every run_command invocation.
         """
-        # Remove the echo of the appended exit logic from the command line
+        # Remove the echo of the appended exit logic from the command line (PowerShell)
         data = re.sub(r';\s*Write-Host\s+"__AGENT_DONE__.*', '', data)
+        # Remove the echo of the appended exit logic from the command line (Bash)
+        data = re.sub(r';\s*echo\s+"__AGENT_DONE__.*', '', data)
 
         # Remove the execution output of the marker itself
         data = re.sub(r'__AGENT_DONE___RUN_\w+\s+(-?\d+)?\r?\n?', '', data)
@@ -160,10 +166,12 @@ class TerminalSession:
 
         try:
             # Inline the exit code extraction logic
-            exit_logic = f'Write-Host "{marker}_{run_id} $(if ($?) {{ 0 }} else {{ if ($LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }} }})"'
-
-            # Combine commands: Command -> Write Exit Code
-            full_command = f'{command}; {exit_logic}'
+            if sys.platform == 'win32':
+                exit_logic = f'Write-Host "{marker}_{run_id} $(if ($?) {{ 0 }} else {{ if ($LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }} }})"'
+                full_command = f'{command}; {exit_logic}'
+            else:
+                exit_logic = f'echo "{marker}_{run_id} $?"'
+                full_command = f'{command}; {exit_logic}'
 
             self.process.write(full_command + "\r\n")
 
