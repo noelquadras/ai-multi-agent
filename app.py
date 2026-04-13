@@ -52,6 +52,34 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    
+    # Start Virtual Desktop for headless GUI support if on Linux
+    if sys.platform != "win32":
+        try:
+            import subprocess
+            print("Initializing Virtual Desktop (Xvfb + VNC + noVNC)...")
+            
+            # 1. Start Xvfb on display :99
+            subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x720x24"], 
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # 2. Start Fluxbox (Window Manager)
+            subprocess.Popen(["fluxbox"], env={**os.environ, "DISPLAY": ":99"},
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # 3. Start x11vnc
+            subprocess.Popen(["x11vnc", "-display", ":99", "-forever", "-shared", "-nopw", "-bg", "-rfbport", "5900"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # 4. Start websockify (noVNC proxy)
+            # noVNC is usually at /usr/share/novnc
+            subprocess.Popen(["websockify", "--web", "/usr/share/novnc/", "6080", "localhost:5900"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            print("Virtual Desktop ready at http://localhost:6080/")
+        except Exception as e:
+            print(f"Failed to initialize Virtual Desktop: {e}")
+
     # Set main loop for terminal manager and pre-warm session
     loop = asyncio.get_running_loop()
     terminal_manager.set_main_loop(loop)
@@ -405,7 +433,7 @@ async def run_terminal_command(body: TerminalCommand):
         full_command = f'cd "{cwd_abs}"; {body.command}'
         
         # Use new robust command execution with the specified timeout
-        result = await session.run_command(full_command, timeout=body.timeout)
+        result = await session.run_command(full_command, timeout=body.timeout if body.timeout is not None else 20.0)
         
         return {
             "status": "completed", 
@@ -414,6 +442,9 @@ async def run_terminal_command(body: TerminalCommand):
             "exit_code": result["exit_code"]
         }
     except Exception as e:
+        print(f"TERMINAL RUN ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

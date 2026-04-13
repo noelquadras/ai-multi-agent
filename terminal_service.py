@@ -50,18 +50,24 @@ class TerminalSession:
                 data = self.process.read(4096)
                 if data:
                     # On Linux/ptyprocess, data is bytes. On Windows/winpty, it might be str or bytes depending on version.
-                    if isinstance(data, bytes):
+                    if isinstance(data, (bytes, bytearray)):
                         data = data.decode('utf-8', errors='replace')
 
                     # 1. Send raw data to control listeners (commands need exact output)
                     for q in list(self.control_listeners):
-                        self.loop.call_soon_threadsafe(q.put_nowait, data)
+                        try:
+                            self.loop.call_soon_threadsafe(q.put_nowait, data)
+                        except Exception: 
+                            pass
 
                     # 2. Send sanitized data to display listeners (WebSockets)
                     clean_data = self._sanitize_output(data)
                     if clean_data:
                         for q in list(self.listeners):
-                            self.loop.call_soon_threadsafe(q.put_nowait, clean_data)
+                            try:
+                                self.loop.call_soon_threadsafe(q.put_nowait, clean_data)
+                            except Exception:
+                                pass
                 else:
                     time.sleep(0.01)
             except Exception as e:
@@ -75,13 +81,11 @@ class TerminalSession:
         Filters out the internal agent command machinery for display.
         Hides the exit-code marker logic appended to every run_command invocation.
         """
-        # Remove the echo of the appended exit logic from the command line (PowerShell)
-        data = re.sub(r';\s*Write-Host\s+"__AGENT_DONE__.*', '', data)
-        # Remove the echo of the appended exit logic from the command line (Bash)
-        data = re.sub(r';\s*echo\s+"__AGENT_DONE__.*', '', data)
+        # Remove the echo of the appended exit logic (PowerShell/Bash)
+        data = re.sub(r';\s*(Write-Host|echo)\s+.*TERMINAL_DONE.*', '', data)
 
         # Remove the execution output of the marker itself
-        data = re.sub(r'__AGENT_DONE___RUN_\w+\s+(-?\d+)?\r?\n?', '', data)
+        data = re.sub(r'\[\[\[TERMINAL_DONE\]\]\].*?(-?\d+)?\r?\n?', '', data)
 
         return data
 
@@ -131,12 +135,32 @@ class TerminalSession:
         for q in list(self.command_event_listeners):
             self.loop.call_soon_threadsafe(q.put_nowait, event)
 
-    def write(self, data: str):
-        if self.active:
-            if sys.platform != "win32" and isinstance(data, str):
-                self.process.write(data.encode('utf-8'))
+    def write(self, data):
+        """Writes data to the PTY, ensuring correct type (bytes vs str)."""
+        if not self.active:
+            return
+            
+        try:
+            if sys.platform != "win32":
+                # Linux/Unix (ptyprocess) usually expects bytes
+                if isinstance(data, str):
+                    self.process.write(data.encode('utf-8'))
+                else:
+                    self.process.write(data)
             else:
-                self.process.write(data)
+                # Windows (winpty) usually expects string
+                if isinstance(data, (bytes, bytearray)):
+                    self.process.write(data.decode('utf-8', errors='replace'))
+                else:
+                    self.process.write(data)
+        except TypeError as e:
+            # Fallback for unexpected library behavior
+            if "bytes-like object is required" in str(e) and isinstance(data, str):
+                self.process.write(data.encode('utf-8'))
+            elif "string argument expected" in str(e) and isinstance(data, (bytes, bytearray)):
+                self.process.write(data.decode('utf-8', errors='replace'))
+            else:
+                raise
 
     async def run_command(self, command: str, timeout: Optional[float] = 20.0):
         """
@@ -147,33 +171,37 @@ class TerminalSession:
             raise RuntimeError("Terminal is busy")
 
         self.busy = True
-        output_buffer = ""
-        marker = "__AGENT_DONE__"
-        run_id = f"RUN_{int(time.time())}"
-
-        # Extract the user-facing command (strip internal cd prefixes for display)
-        display_command = command
-        cd_match = re.match(r'^cd\s+"[^"]+"\s*;\s*(.+)$', command)
-        if cd_match:
-            display_command = cd_match.group(1)
-
-        # Notify listeners that a command has started
-        self._emit_command_event({
-            "type": "command_start",
-            "command": display_command,
-        })
-
-        # Use a specialized listener for this command to capture its specific output
-        control_queue = asyncio.Queue()
-        self.control_listeners.append(control_queue)
-
         try:
+            output_buffer = ""
+            # Unique marker that won't appear in normal output or echoes
+            marker = "[[[TERMINAL_DONE]]]"
+            run_id = f"R{int(time.time() * 1000) % 1000000}" 
+
+            # Extract the user-facing command (strip internal cd prefixes for display)
+            display_command = command
+            cd_match = re.match(r'^cd\s+"[^"]+"\s*;\s*(.+)$', command)
+            if cd_match:
+                display_command = cd_match.group(1)
+
+            # Notify listeners that a command has started
+            self._emit_command_event({
+                "type": "command_start",
+                "command": display_command,
+            })
+
+            # Use a specialized listener for this command to capture its specific output
+            control_queue = asyncio.Queue()
+            self.control_listeners.append(control_queue)
+
             # Inline the exit code extraction logic
+            # We split the marker string using shell-level concatenation to avoid matching the command's own echo
             if sys.platform == 'win32':
-                exit_logic = f'Write-Host "{marker}_{run_id} $(if ($?) {{ 0 }} else {{ if ($LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }} }})"'
+                # PowerShell: "[[[" + "TERMINAL_DONE]]]"
+                exit_logic = f'Write-Host (("[[[" + "TERMINAL_DONE]]]") + "_{run_id} " + (if ($?) {{ 0 }} else {{ if ($LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }} }}))'
                 full_command = f'{command}; {exit_logic}'
             else:
-                exit_logic = f'echo "{marker}_{run_id} $?"'
+                # Bash: "[[[""TERMINAL_DONE]]]"
+                exit_logic = f'echo "[[[""TERMINAL_DONE]]]_{run_id} $?"'
                 full_command = f'{command}; {exit_logic}'
 
             self.write(full_command + "\r\n")
@@ -194,7 +222,7 @@ class TerminalSession:
                     output_buffer += chunk
 
                     # Check for completion marker in the accumulated buffer
-                    if re.search(f"{marker}_{run_id}\\s*(-?\\d+)", output_buffer):
+                    if re.search(re.escape(marker) + f"_{run_id}\\s*(-?\\d+)", output_buffer):
                         break
 
                 except asyncio.TimeoutError:
@@ -212,7 +240,8 @@ class TerminalSession:
         clean_output = output_buffer
 
         # Extract exit code
-        matches = list(re.finditer(f"{marker}_{run_id}\\s*(-?\\d+)", output_buffer))
+        marker_regex = re.escape(marker) + f"_{run_id}\\s*(-?\\d+)"
+        matches = list(re.finditer(marker_regex, output_buffer))
         if matches:
             last_match = matches[-1]
             try:
@@ -222,7 +251,10 @@ class TerminalSession:
 
             clean_output = output_buffer[:last_match.start()]
 
-        # Strip the command echo from the return value
+        # Strip the command echo from the return value (best-effort)
+        # We try both \r\n and \n variants
+        clean_output = clean_output.replace(full_command + "\r\n", "")
+        clean_output = clean_output.replace(full_command + "\n", "")
         clean_output = clean_output.replace(full_command, "")
 
         # Also strip ANSI escape codes for the structured event

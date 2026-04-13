@@ -103,8 +103,18 @@ def cli_tester_node(state: AgentState) -> AgentState:
         }
     
     # Interactive scripts run infinite loops, so we reduce the timeout to quickly check for initial crashes
-    execution_timeout = 3 if is_interactive else 10
+    execution_timeout = 5 if is_interactive else 10
     
+    # Header for GUI/Headless support
+    if is_interactive:
+        head_code = """
+import os
+os.environ['DISPLAY'] = ':99'
+os.environ['SDL_AUDIODRIVER'] = 'dummy'
+os.environ['TK_SILENCE_DEPRECATION'] = '1'
+"""
+        code_to_test = head_code + "\n" + code_to_test
+
     emit_event(state["task_id"], {
         "type": "cli_output",
         "message": f"Running code ({len(code_to_test.splitlines())} lines)...",

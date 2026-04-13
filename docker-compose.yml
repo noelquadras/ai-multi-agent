@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
+      - "6080:6080"
     volumes:
       - ./tasks:/app/tasks
       - ./crew_tasks.db:/app/crew_tasks.db

@@ -9,7 +9,21 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
+    xvfb \
+    x11vnc \
+    fluxbox \
+    novnc \
+    websockify \
+    libasound2-dev \
+    libsdl2-dev \
+    libsdl2-image-dev \
+    libsdl2-mixer-dev \
+    libsdl2-ttf-dev \
+    libx11-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Set up noVNC
+RUN ln -s /usr/share/novnc/vnc_lite.html /usr/share/novnc/index.html
 
 # Copy requirements
 COPY requirements.txt .
@@ -23,6 +37,10 @@ COPY . .
 
 # Expose port 8000
 EXPOSE 8000
+
+# Headless GUI support for Pygame/Tkinter
+ENV SDL_AUDIODRIVER=dummy
+ENV DISPLAY=:99
 
 # Command to run the application
 CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
