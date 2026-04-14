@@ -55,7 +55,14 @@ def check_model_tool_support(model_name: str) -> bool:
 
     # Try binding a tool – if it fails, model doesn't support tools
     try:
-        test_llm = ChatOllama(model=model_name, base_url="http://localhost:11434", temperature=0.1)
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        headers = {"Authorization": f"Bearer {os.getenv('OLLAMA_API_KEY')}"} if os.getenv("OLLAMA_API_KEY") else None
+        test_llm = ChatOllama(
+            model=model_name, 
+            base_url=base_url, 
+            temperature=0.1,
+            headers=headers
+        )
         test_llm.bind_tools([search_duckduckgo])
         _model_tool_support_cache[model_name] = True
         return True
@@ -80,7 +87,7 @@ def _is_groq_model(model_id: str) -> bool:
         return False
     if "/" in model_id:
         return True
-    if lower.startswith(("llama", "gemma2-", "mixtral-", "deepseek-", "whisper-")):
+    if lower.startswith(("llama", "gemma2-", "mixtral-", "deepseek-", "whisper-", "qwen")):
         return True
     return "groq" in lower
 
@@ -99,10 +106,15 @@ def _get_ollama(model_name: str) -> ChatOllama:
     global _ollama_llm
     if _ollama_llm is None or getattr(_ollama_llm, "model", "") != model_name:
         print(f"Initializing Ollama with model: {model_name}")
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        api_key = os.getenv("OLLAMA_API_KEY", "")
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+        
         _ollama_llm = ChatOllama(
             model=model_name,
-            base_url="http://localhost:11434",
+            base_url=base_url,
             temperature=0.7,
+            headers=headers,
         )
     return _ollama_llm
 

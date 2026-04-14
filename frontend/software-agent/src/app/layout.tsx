@@ -33,11 +33,11 @@ export default function RootLayout({
       >
         <ThemeProvider>
           <SessionProvider>
-            <ConvexClientProvider>
-              <ExecutionProvider>
-                <PromptProvider>{children}</PromptProvider>
-              </ExecutionProvider>
-            </ConvexClientProvider>
+            {/* <ConvexClientProvider> */}
+            <ExecutionProvider>
+              <PromptProvider>{children}</PromptProvider>
+            </ExecutionProvider>
+            {/* </ConvexClientProvider> */}
           </SessionProvider>
         </ThemeProvider>
       </body>

@@ -23,3 +23,8 @@ cors
 email-validator
 pywinpty
 websockets
+duckduckgo-search
+playwright
+nest-asyncio
+requests
+aiohttp

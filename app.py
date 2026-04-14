@@ -2,6 +2,10 @@
 # FINAL YEAR PROJECT: AI MULTI-AGENT BACKEND (SQLITE)
 # =========================
 
+import warnings
+# Suppress LangChain's Pydantic V1 compatibility warning for Python 3.14+
+warnings.filterwarnings("ignore", message="Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater")
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
